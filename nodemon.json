@@ -1,0 +1,13 @@
+{
+    "watch": ["src/"],
+    "ext": "ts",
+    "ignore": [
+      "temp/*",
+      "session.json"
+    ],
+    "exec": "node --loader ts-node/esm src/index.ts",
+    "verbose": true,
+    "delay": 1000,
+    "legacyWatch": true
+  }
+  
