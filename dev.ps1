@@ -13,7 +13,11 @@ $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 Write-Host "Logging to: $logFile" -ForegroundColor Yellow
 Write-Host "Started at: $timestamp" -ForegroundColor Yellow
 
-# Start nodemon and redirect all output to log file
-nodemon 2>&1 | Tee-Object -FilePath $logFile -Append
+# Start nodemon (uses nodemon.json config) and redirect all output to log file
+# Use Start-Process to avoid file locking issues
+$process = Start-Process -FilePath "nodemon" -ArgumentList @() -NoNewWindow -PassThru -RedirectStandardOutput $logFile -RedirectStandardError $logFile
+
+# Wait for the process to complete
+$process.WaitForExit()
 
 Write-Host "Development server stopped." -ForegroundColor Red 

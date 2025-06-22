@@ -93,12 +93,12 @@ def transcribe_audio():
         print(f"File size: {file_size} bytes")
 
         # 音声が短すぎるか、ほぼ無音かチェック
-        if len(audio) < 1000 or audio.dBFS < -60 or file_size < 4096:  # より厳しい条件に変更
+        if len(audio) < 500 or audio.dBFS < -70 or file_size < 2048:  # 条件を緩和
             print(f"Skipping transcription for {os.path.basename(temp_path)}: audio too short/silent/small (duration: {len(audio)}ms, dBFS: {audio.dBFS:.2f}, size: {file_size} bytes)")
             return jsonify({"text": ""})
         
         # 音声の最大音量もチェック
-        if audio.max_dBFS < -50:
+        if audio.max_dBFS < -60:  # 条件を緩和
             print(f"Skipping transcription for {os.path.basename(temp_path)}: audio too quiet (max_dBFS: {audio.max_dBFS:.2f})")
             return jsonify({"text": ""})
 
@@ -110,13 +110,16 @@ def transcribe_audio():
             processed_path, 
             language="ja", 
             fp16=False,
-            condition_on_previous_text=False,
-            temperature=0.2,
-            initial_prompt="",
+            condition_on_previous_text=True,  # 前のテキストを考慮
+            temperature=0.0,  # より一貫性のある結果
+            initial_prompt="日本語の会話です。",
             # より自然な結果のための設定
             compression_ratio_threshold=2.4,
             logprob_threshold=-1.0,
-            no_speech_threshold=0.6
+            no_speech_threshold=0.6,
+            word_timestamps=True,  # 単語レベルのタイムスタンプ
+            prepend_punctuations="\"'"¿([{-",
+            append_punctuations="\"'.。,，!！?？:：")]}、"
         )
         print(f"Transcription successful for {os.path.basename(temp_path)}: {result['text']}")
         if not is_quality_transcription(result['text']):
