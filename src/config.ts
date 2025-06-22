@@ -23,7 +23,6 @@ export interface Config {
   bufferExpiration: number;
   serverHost: string;
   serverPort: number;
-  googleCloudKey: string;
   transcriptionChannelId: string;
   transcriptionEnabled: boolean;
 }
@@ -34,7 +33,6 @@ export const createConfig = (): Config => {
     // 機密情報（.envから取得）
     discordToken: process.env.DISCORD_TOKEN || '',
     applicationId: process.env.APPLICATION_ID || '',
-    googleCloudKey: process.env.GOOGLE_CLOUD_KEY || '',
     
     // RVC設定（デフォルト値）
     rvcHost: '127.0.0.1',

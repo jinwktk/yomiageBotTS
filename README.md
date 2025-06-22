@@ -8,11 +8,12 @@ Discordボイスチャンネルでテキストメッセージを音声読み上�
 - **VOICEVOX連携**: 高品質な日本語音声合成
 - **RVC連携**: リアルタイム声変換でユーザー別の声を再現
 - **音声キュー**: 複数の音声を順番に再生（競合防止）
-- **自動参加・退出**: ユーザーの入退室に応じて自動でVCに参加・退出
+- **自動参加・退出**: ユーザーの入退室に応じて自動でVCに参加・退出（0人の場合は参加しない・退出する）
 
 ### 録音・再生機能
 - **リアルタイム録音**: ボイスチャットの会話を自動録音
-- **リプレイ機能**: 過去の会話を指定時間分再生
+- **バッファリング録音**: 30分間の音声バッファを保持（永続化対応）
+- **リプレイ機能**: 過去の会話を指定時間分再生（バッファリング優先）
 - **音量ノーマライズ**: FFmpegを使用した高品質な音声処理
 - **ユーザー別録音**: 特定ユーザーまたは全ユーザーの録音を取得
 
@@ -32,33 +33,16 @@ Discordボイスチャンネルでテキストメッセージを音声読み上�
 `.env`ファイルを作成し、以下の設定を行ってください：
 
 ```env
-# Discord設定
+# Discord設定（必須）
 DISCORD_TOKEN=your_discord_bot_token
 APPLICATION_ID=your_application_id
-
-# VOICEVOX設定
-VOICEVOX_URL=http://localhost:50021
-
-# RVC設定
-RVC_URL=http://localhost:7860
-RVC_MODELS_PATH=./rvc_models
-RVC_DEFAULT_MODEL=your_default_model_name
-RVC_DISABLED=false
-
-# その他設定
-MAX_TEXT_LENGTH=100
-
-# 文字起こし機能設定 (Google Cloud)
-GOOGLE_CLOUD_KEY=your_google_cloud_api_key
-TRANSCRIPTION_CHANNEL_ID=your_channel_id
-TRANSCRIPTION_ENABLED=false
 ```
 
 ## 📦 インストール
 
 1. **リポジトリのクローン**
 ```bash
-git clone https://github.com/your-username/yomiage-bot-ts.git
+git clone https://github.com/jinwktk/yomiageBotTS.git
 cd yomiage-bot-ts
 ```
 
@@ -69,8 +53,8 @@ npm install
 
 3. **環境設定**
 - `.env`ファイルを作成し、必要な環境変数を設定
-- VOICEVOXサーバーを起動
-- RVCサーバーを起動
+- VOICEVOXサーバーを起動（デフォルト: http://localhost:50021）
+- RVCサーバーを起動（デフォルト: http://localhost:7865）
 - FFmpegがPATHに含まれていることを確認
 
 4. **ボットの起動**
@@ -97,7 +81,6 @@ npm start
 |---------|------|--------|
 | `/vspeaker` | VOICEVOX話者を変更 | `/vspeaker speaker:29` |
 | `/vsetvoice` | RVC声モデルを設定 | `/vsetvoice model:your_model` |
-| `/vpitch` | RVCピッチを調整 | `/vpitch value:0` |
 
 ### 録音・再生コマンド
 
@@ -121,19 +104,26 @@ npm start
 
 ### RVC設定
 - ユーザー別モデル設定
-- ピッチ調整機能 (-12〜12)
-- デフォルトモデル設定
+- デフォルトモデル: `omochiv2`
+- 外部パス: `E:\RVC1006Nvidia\RVC1006Nvidia\assets\weights`
 
 ### 録音設定
-- 最大録音時間: 5分
-- 自動クリーンアップ
+- バッファ保持期間: 30分
+- 自動クリーンアップ（3日経過で削除）
 - PCM形式で保存
+- 永続化機能（再起動後もバッファ復元）
+
+### ログ設定
+- 追記モード（ローテーション無効）
+- ログファイル: `logs/yomiage.log`
+- 自動クリーンアップ（7日経過で削除）
 
 ## 🚀 自動機能
 
 ### 自動参加
 - ユーザーがVCに参加した際に自動でボットも参加
 - セッション保存により再起動後も再接続
+- **0人の場合は参加しない**
 
 ### 自動退出
 - チャンネルが空になった際に自動で退出
@@ -152,11 +142,18 @@ yomiage-bot-ts/
 │   ├── config.ts       # 設定管理
 │   ├── voicevox.ts     # VOICEVOX連携
 │   ├── rvc.ts          # RVC連携
+│   ├── logger.ts       # ログ管理
 │   └── index.ts        # エントリーポイント
 ├── temp/               # 一時ファイル
-├── session.json        # セッション情報
-├── .env               # 環境変数
+│   ├── tts/           # 音声合成用
+│   ├── buffers/       # 音声バッファ用
+│   ├── buffered_replay/ # バッファリングリプレイ用
+│   └── replay/        # 通常リプレイ用
+├── logs/              # ログファイル
+├── session.json       # セッション情報
+├── .env.example       # 環境変数サンプル
 ├── package.json       # 依存関係
+├── tsconfig.json      # TypeScript設定
 └── README.md          # このファイル
 ```
 
