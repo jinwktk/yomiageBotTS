@@ -117,9 +117,7 @@ def transcribe_audio():
             compression_ratio_threshold=2.4,
             logprob_threshold=-1.0,
             no_speech_threshold=0.6,
-            word_timestamps=True,  # 単語レベルのタイムスタンプ
-            prepend_punctuations="\"'"¿([{-",
-            append_punctuations="\"'.。,，!！?？:：")]}、"
+            word_timestamps=True  # 単語レベルのタイムスタンプ
         )
         print(f"Transcription successful for {os.path.basename(temp_path)}: {result['text']}")
         if not is_quality_transcription(result['text']):
