@@ -31,23 +31,34 @@ export interface Config {
 export const createConfig = (): Config => {
   // .envの内容がprocess.envにロードされた後にこの関数を呼ぶ
   return {
+    // 機密情報（.envから取得）
     discordToken: process.env.DISCORD_TOKEN || '',
     applicationId: process.env.APPLICATION_ID || '',
-    rvcHost: process.env.RVC_HOST || '127.0.0.1',
-    rvcPort: parseInt(process.env.RVC_PORT || '7865'),
-    rvcDefaultModel: process.env.RVC_DEFAULT_MODEL || 'omochiv2',
-    rvcDisabled: process.env.RVC_DISABLED === 'true',
-    rvcModelsPath: 'E:\\RVC1006Nvidia\\RVC1006Nvidia\\assets\\weights',
-    voicevoxHost: process.env.VOICEVOX_HOST || '127.0.0.1',
-    voicevoxPort: parseInt(process.env.VOICEVOX_PORT || '50021'),
-    maxTextLength: parseInt(process.env.MAX_TEXT_LENGTH || '30'),
-    recordingInterval: parseInt(process.env.RECORDING_INTERVAL || '300'),
-    bufferExpiration: parseInt(process.env.BUFFER_EXPIRATION || '900'),
-    serverHost: process.env.SERVER_HOST || 'localhost',
-    serverPort: parseInt(process.env.SERVER_PORT || '8080'),
     googleCloudKey: process.env.GOOGLE_CLOUD_KEY || '',
-    transcriptionChannelId: process.env.TRANSCRIPTION_CHANNEL_ID || '1385376893997678602',
-    transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
+    
+    // RVC設定（デフォルト値）
+    rvcHost: '127.0.0.1',
+    rvcPort: 7865,
+    rvcDefaultModel: 'omochiv2',
+    rvcDisabled: false,
+    rvcModelsPath: 'E:\\RVC1006Nvidia\\RVC1006Nvidia\\assets\\weights',
+    
+    // VOICEVOX設定（デフォルト値）
+    voicevoxHost: '127.0.0.1',
+    voicevoxPort: 50021,
+    
+    // テキスト・録音・バッファ設定（デフォルト値）
+    maxTextLength: 30,
+    recordingInterval: 300,
+    bufferExpiration: 900,
+    
+    // サーバー設定（デフォルト値）
+    serverHost: 'localhost',
+    serverPort: 8080,
+    
+    // 文字起こし設定（デフォルト値）
+    transcriptionChannelId: '1385376893997678602',
+    transcriptionEnabled: true,
   };
 };
 
