@@ -47,6 +47,11 @@ RVC_DISABLED=false
 
 # その他設定
 MAX_TEXT_LENGTH=100
+
+# 文字起こし機能設定 (Google Cloud)
+GOOGLE_CLOUD_KEY=your_google_cloud_api_key
+TRANSCRIPTION_CHANNEL_ID=your_channel_id
+TRANSCRIPTION_ENABLED=false
 ```
 
 ## 📦 インストール

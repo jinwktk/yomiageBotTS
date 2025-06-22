@@ -23,6 +23,9 @@ export interface Config {
   bufferExpiration: number;
   serverHost: string;
   serverPort: number;
+  googleCloudKey: string;
+  transcriptionChannelId: string;
+  transcriptionEnabled: boolean;
 }
 
 export const createConfig = (): Config => {
@@ -42,6 +45,9 @@ export const createConfig = (): Config => {
     bufferExpiration: parseInt(process.env.BUFFER_EXPIRATION || '900'),
     serverHost: process.env.SERVER_HOST || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT || '8080'),
+    googleCloudKey: process.env.GOOGLE_CLOUD_KEY || '',
+    transcriptionChannelId: process.env.TRANSCRIPTION_CHANNEL_ID || '1385376893997678602',
+    transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
   };
 };
 
