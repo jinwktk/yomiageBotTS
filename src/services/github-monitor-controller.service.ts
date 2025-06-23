@@ -36,7 +36,7 @@ export class GitHubMonitorController {
     }
   }
 
-  public start(): void {
+  public async start(): Promise<void> {
     if (!this.config.enabled) {
       return;
     }
@@ -49,19 +49,19 @@ export class GitHubMonitorController {
       this.updateHandler.handleUpdate(newSha);
     };
 
-    this.monitor.start(onUpdate, this.config.checkIntervalMs);
+    await this.monitor.start(onUpdate, this.config.checkIntervalMs);
     this.logger.info('GitHub監視を開始しました');
   }
 
-  public stop(): void {
+  public async stop(): Promise<void> {
     if (this.isInitialized) {
-      this.monitor.stop();
+      await this.monitor.stop();
     }
   }
 
   private setupProcessHandlers(): void {
-    const gracefulShutdown = (signal: string) => {
-      this.stop();
+    const gracefulShutdown = async (signal: string) => {
+      await this.stop();
       process.exit(0);
     };
 
@@ -79,7 +79,7 @@ export class GitHubMonitorController {
     
     try {
       await controller.initialize();
-      controller.start();
+      await controller.start();
       return controller;
     } catch (error) {
       logger.error('GitHub監視の初期化に失敗しました:', error);

@@ -1230,7 +1230,7 @@ class YomiageBot {
             return;
           }
           // 重要なエラーのみログ出力
-          this.logger.warn(`[Stream] Recoverable audio player error for user ${userId}:`, error.message);
+          this.logger.warn(`[Stream] Recoverable audio player error for user ${userId}: ${error.message}`);
           // エラーが発生してもプレイヤーは削除せず、自然な終了を待つ
         });
 
@@ -1267,7 +1267,7 @@ class YomiageBot {
             return;
           }
           // 重要なエラーのみ警告として記録
-          this.logger.warn(`[Stream] Audio stream issue for user ${userId}:`, error.message);
+          this.logger.warn(`[Stream] Audio stream issue for user ${userId}: ${error.message}`);
         });
 
       } catch (error: any) {
@@ -1288,7 +1288,7 @@ class YomiageBot {
           return;
         }
         // 重要なエラーのみログ出力し、処理は継続
-        this.logger.warn(`[Stream] Stream creation issue for user ${userId}:`, error.message);
+        this.logger.warn(`[Stream] Stream creation issue for user ${userId}: ${error.message}`);
       }
     });
 

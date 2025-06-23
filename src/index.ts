@@ -7,6 +7,7 @@ import { GitHubMonitorController } from './services/github-monitor-controller.se
 import { GitHubMonitorService } from './services/github-monitor.service.js';
 import { UpdateHandlerService } from './services/update-handler.service.js';
 import { GitHubApiService } from './services/github-api.service.js';
+import { GitHubWebHookHandlerService } from './services/github-webhook-handler.service.js';
 import { LoggerService } from './services/logger.service.js';
 
 async function main() {
@@ -37,8 +38,20 @@ async function initializeGitHubMonitoring(config: Config, logger: LoggerService)
     // 依存性注入でサービスを構築
     const githubLogger = LoggerService.create('GitHub');
     const githubApi = new GitHubApiService(config.githubMonitor.apiTimeout, githubLogger);
-    const monitor = new GitHubMonitorService(config.githubMonitor, githubApi, githubLogger);
     const updateHandler = new UpdateHandlerService(githubLogger);
+    
+    // WebHookハンドラーの作成（WebHook有効時のみ）
+    const webhookHandler = config.githubMonitor.webhook.enabled 
+      ? new GitHubWebHookHandlerService(config.githubMonitor, githubLogger, updateHandler)
+      : undefined;
+    
+    const monitor = new GitHubMonitorService(
+      config.githubMonitor, 
+      githubApi, 
+      githubLogger,
+      webhookHandler,
+      updateHandler
+    );
 
     // コントローラー作成と開始
     await GitHubMonitorController.createAndStart(

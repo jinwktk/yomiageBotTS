@@ -1,7 +1,7 @@
 export interface IGitHubMonitor {
   initialize(): Promise<void>;
-  start(onUpdate: (sha: string) => void, intervalMs?: number): void;
-  stop(): void;
+  start(onUpdate: (sha: string) => void, intervalMs?: number): Promise<void>;
+  stop(): Promise<void>;
   hasUpdates(): Promise<boolean>;
   getLatestCommitSha(): Promise<string>;
   setCurrentSha(sha: string): void;
@@ -39,6 +39,31 @@ export interface GitHubCommit {
     author: {
       name: string;
       date: string;
+    };
+  };
+}
+
+export interface IGitHubWebHookHandler {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  isRunning(): boolean;
+  verifySignature(body: string, signature: string): boolean;
+}
+
+export interface GitHubWebHookPayload {
+  ref: string;
+  after: string;
+  before: string;
+  repository: {
+    name: string;
+    full_name: string;
+  };
+  head_commit: {
+    id: string;
+    message: string;
+    author: {
+      name: string;
+      email: string;
     };
   };
 }

@@ -15,6 +15,12 @@ export interface GitHubMonitorConfig {
   branch: string;
   checkIntervalMs: number;
   apiTimeout: number;
+  webhook: {
+    enabled: boolean;
+    port: number;
+    path: string;
+    secret: string;
+  };
 }
 
 export interface Config {
@@ -94,6 +100,12 @@ export const createConfig = (): Config => {
       branch: process.env.GITHUB_BRANCH || 'main',
       checkIntervalMs: parseInt(process.env.GITHUB_CHECK_INTERVAL_MS || '120000'), // デフォルト2分に延長
       apiTimeout: parseInt(process.env.GITHUB_API_TIMEOUT_MS || '10000'),
+      webhook: {
+        enabled: false, // 一時的に無効化
+        port: parseInt(process.env.GITHUB_WEBHOOK_PORT || '3001'),
+        path: process.env.GITHUB_WEBHOOK_PATH || '/webhook/github',
+        secret: process.env.GITHUB_WEBHOOK_SECRET || '',
+      },
     },
     
     // 音質・精度関連設定

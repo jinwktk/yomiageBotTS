@@ -92,7 +92,7 @@ export class SpeechToText {
         }
       }
 
-      const result = response.data;
+      const result = response?.data;
       console.log(`[SpeechToText] Received response from Whisper API:`, result);
 
       if (result && result.text) {

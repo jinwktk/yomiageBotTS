@@ -11,7 +11,8 @@ describe('GitHubMonitorService', () => {
 
   beforeEach(() => {
     mockGitHubApi = {
-      getLatestCommit: jest.fn()
+      getLatestCommit: jest.fn(),
+      getRateLimitStatus: jest.fn()
     };
     
     mockLogger = {
@@ -27,7 +28,13 @@ describe('GitHubMonitorService', () => {
       repositoryName: 'test-repo',
       branch: 'main',
       checkIntervalMs: 1000,
-      apiTimeout: 5000
+      apiTimeout: 5000,
+      webhook: {
+        enabled: false,
+        port: 3001,
+        path: '/webhook/github',
+        secret: ''
+      }
     };
 
     monitor = new GitHubMonitorService(config, mockGitHubApi, mockLogger);

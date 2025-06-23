@@ -1,4 +1,4 @@
-import type { IGitHubMonitor, IGitHubApi, ILogger } from '../interfaces/github-monitor.interface.js';
+import type { IGitHubMonitor, IGitHubApi, ILogger, IGitHubWebHookHandler, IUpdateHandler } from '../interfaces/github-monitor.interface.js';
 import type { GitHubMonitorConfig } from '../config.js';
 
 export class GitHubMonitorService implements IGitHubMonitor {
@@ -7,13 +7,23 @@ export class GitHubMonitorService implements IGitHubMonitor {
   private readonly config: GitHubMonitorConfig;
   private readonly githubApi: IGitHubApi;
   private readonly logger: ILogger;
+  private readonly webhookHandler?: IGitHubWebHookHandler;
+  private readonly updateHandler?: IUpdateHandler;
   private currentInterval: number;
   private consecutiveErrors: number = 0;
 
-  constructor(config: GitHubMonitorConfig, githubApi: IGitHubApi, logger: ILogger) {
+  constructor(
+    config: GitHubMonitorConfig, 
+    githubApi: IGitHubApi, 
+    logger: ILogger,
+    webhookHandler?: IGitHubWebHookHandler,
+    updateHandler?: IUpdateHandler
+  ) {
     this.config = config;
     this.githubApi = githubApi;
     this.logger = logger;
+    this.webhookHandler = webhookHandler;
+    this.updateHandler = updateHandler;
     this.currentInterval = config.checkIntervalMs;
   }
 
@@ -62,11 +72,23 @@ export class GitHubMonitorService implements IGitHubMonitor {
     }
   }
 
-  public start(onUpdate: (sha: string) => void, intervalMs?: number): void {
-    this.stop(); // 既存の監視を停止
+  public async start(onUpdate: (sha: string) => void, intervalMs?: number): Promise<void> {
+    await this.stop(); // 既存の監視を停止
 
+    // WebHookが有効かつ利用可能な場合はWebHookを使用
+    if (this.config.webhook.enabled && this.webhookHandler) {
+      try {
+        await this.webhookHandler.start();
+        this.logger.info('[GitHub] WebHook監視モードで開始しました');
+        return;
+      } catch (error) {
+        this.logger.error('[GitHub] WebHook開始に失敗、APIポーリングにフォールバック:', error);
+      }
+    }
+
+    // APIポーリングモードで開始
     this.currentInterval = intervalMs || this.config.checkIntervalMs;
-    this.logger.info(`GitHub監視を開始: ${this.currentInterval / 1000}秒間隔`);
+    this.logger.info(`[GitHub] APIポーリング監視を開始: ${this.currentInterval / 1000}秒間隔`);
 
     const checkForUpdates = async () => {
       try {
@@ -115,10 +137,16 @@ export class GitHubMonitorService implements IGitHubMonitor {
     }
   }
 
-  public stop(): void {
+  public async stop(): Promise<void> {
+    // APIポーリングの停止
     if (this.intervalId) {
       clearTimeout(this.intervalId);
       this.intervalId = null;
+    }
+
+    // WebHookサーバーの停止
+    if (this.webhookHandler && this.webhookHandler.isRunning()) {
+      await this.webhookHandler.stop();
     }
   }
 

@@ -329,8 +329,9 @@ class LogManager {
     }
   }
 
-  public warn(message: string) {
-    this.writeToLog(`WARN: ${message}`);
+  public warn(message: string, ...args: any[]) {
+    const fullMessage = args.length > 0 ? `${message} ${args.join(' ')}` : message;
+    this.writeToLog(`WARN: ${fullMessage}`);
   }
 
   public close() {
