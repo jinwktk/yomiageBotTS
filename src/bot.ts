@@ -200,6 +200,11 @@ class YomiageBot {
 
     // 音声横流しセッションの自動切断チェック
     await this.checkStreamingChannelsForAutoDisconnect(oldState, newState);
+
+    // ユーザーがチャンネルに参加した場合、音声横流しの再開をチェック
+    if (newState.channelId && !oldState.channelId) {
+      await this.checkAndStartAutoStreaming();
+    }
   }
 
   private preprocessMessage(content: string): string {
@@ -1009,6 +1014,19 @@ class YomiageBot {
         return;
       }
 
+      // 人数チェック：両方のチャンネルに人がいることを確認
+      const sourceMembers = sourceChannel.members.filter((m: GuildMember) => !m.user.bot);
+      const targetMembers = targetChannel.members.filter((m: GuildMember) => !m.user.bot);
+      
+      this.logger.log(`[AutoStream] Source channel (${sourceChannel.name}): ${sourceMembers.size} members`);
+      this.logger.log(`[AutoStream] Target channel (${targetChannel.name}): ${targetMembers.size} members`);
+      
+      if (sourceMembers.size === 0 || targetMembers.size === 0) {
+        this.logger.log('[AutoStream] Skipping auto-streaming: one or both channels are empty');
+        this.logger.log('[AutoStream] Will retry when users join the channels');
+        return;
+      }
+
       // 既存の接続をチェック（通常の録音機能との競合を避ける）
       const existingSourceConnection = getVoiceConnection(sourceGuildId);
       const existingTargetConnection = getVoiceConnection(targetGuildId);
@@ -1494,6 +1512,53 @@ class YomiageBot {
       this.logger.log(`[StreamStop] Successfully stopped streaming session ${sessionId}`);
     } catch (error) {
       this.logger.error(`[StreamStop] Error stopping streaming session ${sessionId}:`, error);
+    }
+  }
+
+  private async checkAndStartAutoStreaming() {
+    try {
+      const sourceGuildId = '995627275074666568';
+      const sourceChannelId = '1319432294762545162';
+      const targetGuildId = '813783748566581249';
+      const targetChannelId = '813783749153259606';
+
+      // 既に音声横流しが動作中の場合はスキップ
+      if (this.streamSessions.size > 0) {
+        this.logger.log('[AutoStreamCheck] Audio streaming already active, skipping');
+        return;
+      }
+
+      // チャンネルの存在確認
+      try {
+        const sourceGuild = await this.client.guilds.fetch(sourceGuildId);
+        const sourceChannel = await sourceGuild.channels.fetch(sourceChannelId);
+        const targetGuild = await this.client.guilds.fetch(targetGuildId);
+        const targetChannel = await targetGuild.channels.fetch(targetChannelId);
+
+        if (!sourceChannel || !sourceChannel.isVoiceBased() || !targetChannel || !targetChannel.isVoiceBased()) {
+          this.logger.warn('[AutoStreamCheck] Source or target channel not found or not voice-based');
+          return;
+        }
+
+        // 人数チェック
+        const sourceMembers = sourceChannel.members.filter((m: GuildMember) => !m.user.bot);
+        const targetMembers = targetChannel.members.filter((m: GuildMember) => !m.user.bot);
+
+        this.logger.log(`[AutoStreamCheck] Source channel (${sourceChannel.name}): ${sourceMembers.size} members`);
+        this.logger.log(`[AutoStreamCheck] Target channel (${targetChannel.name}): ${targetMembers.size} members`);
+
+        // 両方のチャンネルに人がいる場合のみ音声横流しを開始
+        if (sourceMembers.size > 0 && targetMembers.size > 0) {
+          this.logger.log('[AutoStreamCheck] Both channels have users, starting auto-streaming');
+          await this.startAutoStreaming();
+        } else {
+          this.logger.log('[AutoStreamCheck] One or both channels are empty, not starting auto-streaming');
+        }
+      } catch (error) {
+        this.logger.error('[AutoStreamCheck] Error checking channels:', error);
+      }
+    } catch (error) {
+      this.logger.error('[AutoStreamCheck] Error in auto-streaming check:', error);
     }
   }
 }
