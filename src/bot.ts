@@ -129,6 +129,9 @@ class YomiageBot {
       
       // パフォーマンス監視を開始
       this.startPerformanceMonitoring();
+      
+      // 定期的な空チャンネルチェックを開始
+      this.startEmptyChannelMonitoring();
     });
     this.client.on('voiceStateUpdate', this.handleVoiceStateUpdate.bind(this));
     this.client.on('interactionCreate', this.handleInteraction.bind(this));
@@ -471,14 +474,25 @@ class YomiageBot {
       try {
         const guild = await this.client.guilds.fetch(guildId);
         const channel = await guild.channels.fetch(session[guildId]);
-        if (channel && channel.isVoiceBased() && channel.members.filter(m => !m.user.bot).size > 0) {
-          console.log(`Rejoining ${channel.name} (users present).`);
-          await this.joinVoiceChannelByIds(guildId, channel.id);
+        
+        if (channel && channel.isVoiceBased()) {
+          const nonBotMembers = channel.members.filter((m: GuildMember) => !m.user.bot);
+          this.logger.log(`[Rejoin] Checking ${channel.name}: ${nonBotMembers.size} non-bot members`);
+          
+          if (nonBotMembers.size > 0) {
+            this.logger.log(`[Rejoin] Rejoining ${channel.name} (${nonBotMembers.size} users present)`);
+            await this.joinVoiceChannelByIds(guildId, channel.id);
+          } else {
+            this.logger.log(`[Rejoin] Skipping rejoin for ${channel.name} (empty channel)`);
+            // 空のチャンネルはセッションから削除
+            await this.saveSession(guildId, null);
+          }
         } else {
-          console.log(`Skipping rejoin for ${channel ? channel.name : `ID: ${session[guildId]}`} (empty or not found).`);
+          this.logger.warn(`[Rejoin] Channel not found or not voice-based: ${session[guildId]}`);
+          await this.saveSession(guildId, null);
         }
       } catch (error) {
-        console.error(`Failed to rejoin for guild ${guildId}:`, error);
+        this.logger.error(`[Rejoin] Failed to rejoin for guild ${guildId}:`, error);
         await this.saveSession(guildId, null);
       }
     }
@@ -1333,6 +1347,47 @@ class YomiageBot {
       }
       
     }, 5 * 60 * 1000); // 5分間隔
+  }
+
+  private startEmptyChannelMonitoring() {
+    this.logger.log('[EmptyMonitor] Starting empty channel monitoring...');
+    
+    // 5分ごとに空チャンネルをチェック
+    setInterval(async () => {
+      await this.checkEmptyChannelsAndLeave();
+    }, 5 * 60 * 1000); // 5分間隔
+  }
+
+  private async checkEmptyChannelsAndLeave() {
+    try {
+      this.logger.log('[EmptyMonitor] Checking for empty channels...');
+      
+      // 現在接続している全チャンネルをチェック
+      for (const [guildId, connection] of this.connections.entries()) {
+        try {
+          const channelId = connection.joinConfig?.channelId;
+          if (!channelId) continue;
+
+          const channel = await this.client.channels.fetch(channelId);
+          if (channel && channel.isVoiceBased()) {
+            const nonBotMembers = channel.members.filter((m: GuildMember) => !m.user.bot);
+            
+            this.logger.log(`[EmptyMonitor] Channel ${channel.name} in guild ${guildId}: ${nonBotMembers.size} non-bot members`);
+            
+            if (nonBotMembers.size === 0) {
+              this.logger.log(`[EmptyMonitor] Channel ${channel.name} is empty, leaving automatically`);
+              await this.leaveVoiceChannel(guildId, true);
+            }
+          }
+        } catch (error) {
+          this.logger.error(`[EmptyMonitor] Error checking channel in guild ${guildId}:`, error);
+        }
+      }
+      
+      this.logger.log(`[EmptyMonitor] Check completed. Active connections: ${this.connections.size}`);
+    } catch (error) {
+      this.logger.error('[EmptyMonitor] Error in empty channel monitoring:', error);
+    }
   }
 
   private async checkStreamingChannelsForAutoDisconnect(oldState: VoiceState, newState: VoiceState) {
