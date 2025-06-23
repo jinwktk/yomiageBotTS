@@ -1,4 +1,5 @@
 // eslint-disable-next-line @typescript-eslint/no-deprecated
+// @ts-ignore
 import { client as gradioClient } from "@gradio/client";
 import type { Config } from "./config.js";
 import { realpathSync } from 'fs';
