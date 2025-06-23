@@ -52,9 +52,15 @@ export class UpdateHandlerService implements IUpdateHandler {
       // 方法1: ファイル変更をトリガーしてnodemonを確実に再起動させる
       await this.triggerFileChange();
       
-      // 方法2: nodemonに再起動シグナルを送信
-      this.logger.info('nodemonに再起動シグナルを送信中...');
-      process.kill(process.pid, 'SIGUSR2');
+      // 方法2: プラットフォーム別の再起動シグナル送信
+      if (process.platform !== 'win32') {
+        // Unix系でのみSIGUSR2を使用
+        this.logger.info('nodemonに再起動シグナルを送信中...');
+        process.kill(process.pid, 'SIGUSR2');
+      } else {
+        // Windows環境では直接終了してnodemonに任せる
+        this.logger.info('Windows環境での再起動処理...');
+      }
       
       // 方法3: 少し待ってから強制終了（nodemonがキャッチする）
       setTimeout(() => {
