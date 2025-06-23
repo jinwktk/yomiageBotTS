@@ -92,7 +92,7 @@ export const createConfig = (): Config => {
       repositoryOwner: process.env.GITHUB_REPO_OWNER || 'jinwktk',
       repositoryName: process.env.GITHUB_REPO_NAME || 'yomiageBotTS',
       branch: process.env.GITHUB_BRANCH || 'main',
-      checkIntervalMs: parseInt(process.env.GITHUB_CHECK_INTERVAL_MS || '30000'),
+      checkIntervalMs: parseInt(process.env.GITHUB_CHECK_INTERVAL_MS || '120000'), // デフォルト2分に延長
       apiTimeout: parseInt(process.env.GITHUB_API_TIMEOUT_MS || '10000'),
     },
     

@@ -29,6 +29,7 @@ export interface ILogger {
 
 export interface IGitHubApi {
   getLatestCommit(owner: string, repo: string, branch: string): Promise<GitHubCommit>;
+  getRateLimitStatus(): { remaining: number; resetTime: number };
 }
 
 export interface GitHubCommit {
