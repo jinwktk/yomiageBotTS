@@ -1,5 +1,4 @@
 import express from 'express';
-import type { Request, Response } from 'express';
 import { createHmac } from 'crypto';
 import type { 
   IGitHubWebHookHandler, 
@@ -32,7 +31,7 @@ export class GitHubWebHookHandlerService implements IGitHubWebHookHandler {
   }
 
   private setupRoutes(): void {
-    this.app.post(this.config.webhook.path, async (req: Request, res: Response) => {
+    this.app.post(this.config.webhook.path, async (req: any, res: any) => {
       try {
         const signature = req.headers['x-hub-signature-256'] as string;
         const body = req.body.toString();
@@ -82,7 +81,7 @@ export class GitHubWebHookHandlerService implements IGitHubWebHookHandler {
     });
 
     // ヘルスチェックエンドポイント
-    this.app.get('/health', (req: Request, res: Response) => {
+    this.app.get('/health', (req: any, res: any) => {
       res.status(200).json({ 
         status: 'ok', 
         webhook: this.running,
