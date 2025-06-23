@@ -194,6 +194,9 @@ class YomiageBot {
         this.logger.error('[LeaveLogic] Error handling user departure:', error);
       }
     }
+
+    // 音声横流しセッションの自動切断チェック
+    await this.checkStreamingChannelsForAutoDisconnect(oldState, newState);
   }
 
   private preprocessMessage(content: string): string {
@@ -1330,6 +1333,113 @@ class YomiageBot {
       }
       
     }, 5 * 60 * 1000); // 5分間隔
+  }
+
+  private async checkStreamingChannelsForAutoDisconnect(oldState: VoiceState, newState: VoiceState) {
+    try {
+      // 音声横流しが有効な場合のみチェック
+      if (this.streamSessions.size === 0) return;
+
+      // ユーザーがチャンネルを退出した場合のみ処理
+      if (!oldState.channelId || newState.channelId) return;
+
+      const leftChannelId = oldState.channelId;
+      const leftGuildId = oldState.guild.id;
+
+      // 退出したチャンネルが音声横流しのソースまたはターゲットチャンネルかチェック
+      for (const [sessionId, session] of this.streamSessions.entries()) {
+        let shouldDisconnect = false;
+        let channelToCheck: string | null = null;
+        let guildToCheck: string | null = null;
+        let sessionType = '';
+
+        // ソースチャンネルからの退出をチェック
+        if (session.sourceChannelId === leftChannelId && session.sourceGuildId === leftGuildId) {
+          channelToCheck = leftChannelId;
+          guildToCheck = leftGuildId;
+          sessionType = 'source';
+        }
+        // ターゲットチャンネルからの退出をチェック
+        else if (session.targetChannelId === leftChannelId && session.targetGuildId === leftGuildId) {
+          channelToCheck = leftChannelId;
+          guildToCheck = leftGuildId;
+          sessionType = 'target';
+        }
+
+        if (channelToCheck && guildToCheck) {
+          try {
+            const channel = await this.client.channels.fetch(channelToCheck);
+            if (channel && channel.isVoiceBased()) {
+              const nonBotMembers = channel.members.filter((m: GuildMember) => !m.user.bot);
+              
+              if (nonBotMembers.size === 0) {
+                this.logger.log(`[StreamAutoDisconnect] ${sessionType} channel ${channel.name} is empty, stopping streaming session ${sessionId}`);
+                shouldDisconnect = true;
+              } else {
+                this.logger.log(`[StreamAutoDisconnect] ${sessionType} channel ${channel.name} still has ${nonBotMembers.size} users, continuing session`);
+              }
+            }
+          } catch (error) {
+            this.logger.error(`[StreamAutoDisconnect] Error checking ${sessionType} channel ${channelToCheck}:`, error);
+          }
+        }
+
+        // どちらかのチャンネルが空になった場合、音声横流しセッションを停止
+        if (shouldDisconnect) {
+          await this.stopStreamingSession(sessionId, `${sessionType} channel became empty`);
+        }
+      }
+    } catch (error) {
+      this.logger.error('[StreamAutoDisconnect] Error in auto-disconnect check:', error);
+    }
+  }
+
+  private async stopStreamingSession(sessionId: string, reason: string) {
+    try {
+      const session = this.streamSessions.get(sessionId);
+      if (!session) {
+        this.logger.warn(`[StreamStop] Session ${sessionId} not found`);
+        return;
+      }
+
+      this.logger.log(`[StreamStop] Stopping streaming session ${sessionId}: ${reason}`);
+
+      // ソースとターゲットの接続を切断
+      const sourceConnection = getVoiceConnection(session.sourceGuildId);
+      const targetConnection = getVoiceConnection(session.targetGuildId);
+
+      if (sourceConnection) {
+        this.logger.log(`[StreamStop] Disconnecting from source channel (Guild: ${session.sourceGuildId})`);
+        sourceConnection.destroy();
+      }
+
+      if (targetConnection) {
+        this.logger.log(`[StreamStop] Disconnecting from target channel (Guild: ${session.targetGuildId})`);
+        targetConnection.destroy();
+      }
+
+      // ストリーミングプレイヤーをクリーンアップ
+      for (const [userId, player] of this.streamPlayers.entries()) {
+        try {
+          player.stop();
+          this.streamPlayers.delete(userId);
+          this.logger.log(`[StreamStop] Stopped streaming player for user ${userId}`);
+        } catch (error) {
+          this.logger.error(`[StreamStop] Error stopping player for user ${userId}:`, error);
+        }
+      }
+
+      // 録音を停止
+      this.stopRecording(session.sourceGuildId);
+      this.stopRecording(session.targetGuildId);
+
+      // セッションを削除
+      this.streamSessions.delete(sessionId);
+      
+      this.logger.log(`[StreamStop] Successfully stopped streaming session ${sessionId}`);
+    } catch (error) {
+      this.logger.error(`[StreamStop] Error stopping streaming session ${sessionId}:`, error);
+    }
   }
 }
 
