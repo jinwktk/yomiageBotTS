@@ -30,7 +30,6 @@ async function main() {
 
 async function initializeGitHubMonitoring(config: Config, logger: LoggerService) {
   if (!config.githubMonitor.enabled) {
-    logger.info('GitHub監視は無効です');
     return;
   }
 
@@ -50,7 +49,7 @@ async function initializeGitHubMonitoring(config: Config, logger: LoggerService)
     );
     
   } catch (error) {
-    logger.warn('GitHub監視の初期化に失敗しました。監視なしで続行します:', error);
+    logger.warn('GitHub監視の初期化に失敗しました。監視なしで続行します');
   }
 }
 

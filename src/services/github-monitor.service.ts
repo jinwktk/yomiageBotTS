@@ -16,7 +16,6 @@ export class GitHubMonitorService implements IGitHubMonitor {
 
   public setCurrentSha(sha: string): void {
     this.currentSha = sha;
-    this.logger.debug(`現在のSHAを設定: ${sha.substring(0, 7)}`);
   }
 
   public async getLatestCommitSha(): Promise<string> {
@@ -40,8 +39,6 @@ export class GitHubMonitorService implements IGitHubMonitor {
       
       if (hasUpdate) {
         this.logger.info(`新しいコミットを検出: ${this.currentSha.substring(0, 7)} → ${latestSha.substring(0, 7)}`);
-      } else {
-        this.logger.debug('更新はありません');
       }
       
       return hasUpdate;
@@ -76,13 +73,11 @@ export class GitHubMonitorService implements IGitHubMonitor {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      this.logger.info('GitHub監視を停止しました');
     }
   }
 
   public async initialize(): Promise<void> {
     try {
-      this.logger.info('GitHub監視を初期化中...');
       this.currentSha = await this.getLatestCommitSha();
       this.logger.info(`GitHub監視を初期化しました。現在のSHA: ${this.currentSha.substring(0, 7)}`);
     } catch (error) {

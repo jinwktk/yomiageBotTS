@@ -11,8 +11,6 @@ export class GitHubApiService implements IGitHubApi {
 
   async getLatestCommit(owner: string, repo: string, branch: string): Promise<GitHubCommit> {
     const url = `https://api.github.com/repos/${owner}/${repo}/commits/${branch}`;
-    
-    this.logger.debug(`GitHub APIリクエスト: ${url}`);
 
     try {
       const controller = new AbortController();
@@ -33,9 +31,6 @@ export class GitHubApiService implements IGitHubApi {
       }
 
       const data = await response.json();
-      
-      this.logger.debug(`GitHub APIレスポンス取得: SHA=${data.sha.substring(0, 7)}`);
-      
       return data;
     } catch (error) {
       if (error instanceof Error) {

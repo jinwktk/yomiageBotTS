@@ -30,7 +30,6 @@ export class GitHubMonitorController {
       await this.monitor.initialize();
       this.setupProcessHandlers();
       this.isInitialized = true;
-      this.logger.info('GitHub監視コントローラーを初期化しました');
     } catch (error) {
       this.logger.error('GitHub監視の初期化に失敗しました:', error);
       throw error;
@@ -39,7 +38,6 @@ export class GitHubMonitorController {
 
   public start(): void {
     if (!this.config.enabled) {
-      this.logger.info('GitHub監視が無効のため、監視を開始しません');
       return;
     }
 
@@ -58,13 +56,11 @@ export class GitHubMonitorController {
   public stop(): void {
     if (this.isInitialized) {
       this.monitor.stop();
-      this.logger.info('GitHub監視を停止しました');
     }
   }
 
   private setupProcessHandlers(): void {
     const gracefulShutdown = (signal: string) => {
-      this.logger.info(`\n${signal}シグナルを受信しました。アプリケーションを終了します...`);
       this.stop();
       process.exit(0);
     };

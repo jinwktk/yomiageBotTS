@@ -13,11 +13,8 @@ export class UpdateHandlerService implements IUpdateHandler {
 
   public async pullLatestChanges(): Promise<PullResult> {
     try {
-      this.logger.info('Git pullを実行中...');
       const branch = await this.getCurrentBranch();
       const { stdout, stderr } = await execAsync(`git pull origin ${branch}`);
-      
-      this.logger.info('Git pull完了:', stdout.trim());
       
       return {
         success: true,
@@ -59,11 +56,9 @@ export class UpdateHandlerService implements IUpdateHandler {
   public async getCurrentBranch(): Promise<string> {
     try {
       const { stdout } = await execAsync('git branch --show-current');
-      const branch = stdout.trim();
-      this.logger.debug(`現在のブランチ: ${branch}`);
-      return branch;
+      return stdout.trim();
     } catch (error) {
-      this.logger.warn('現在のブランチ取得に失敗しました。mainブランチを使用します。', error);
+      this.logger.warn('現在のブランチ取得に失敗しました。mainブランチを使用します。');
       return 'main';
     }
   }
