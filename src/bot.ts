@@ -48,11 +48,6 @@ interface AudioQueueItem {
   onFinish?: () => void;
 }
 
-interface BufferedAudio {
-  data: Buffer;
-  timestamp: number;
-  userId: string;
-}
 
 interface StreamSession {
   sourceGuildId: string;
@@ -77,15 +72,9 @@ class YomiageBot {
   private audioPlayers: Map<string, AudioPlayer> = new Map();
   private recordingStates: Map<string, fs.WriteStream> = new Map();
   private recordedChunks: Map<string, string[]> = new Map();
-  private readonly maxRecordingBufferMinutes = 30;
+  private readonly maxRecordingBufferMinutes: number;
   private audioQueues: Map<string, AudioQueueItem[]> = new Map();
   private isPlaying: Map<string, boolean> = new Map();
-  // 連続バッファリング用
-  private audioBuffers: Map<string, BufferedAudio[]> = new Map();
-  private readonly bufferDurationMs = 30 * 60 * 1000; // 30分間のバッファ
-  // バッファ永続化用
-  private readonly bufferPersistenceDir = 'temp/buffers';
-  private readonly bufferPersistenceInterval = 30000; // 30秒ごとに保存
   // 音声横流し用
   private streamSessions: Map<string, StreamSession> = new Map();
   private streamConnections: Map<string, any> = new Map();
@@ -97,6 +86,7 @@ class YomiageBot {
   constructor(config: Config) {
     this.config = config;
     this.logger = new LogManager();
+    this.maxRecordingBufferMinutes = config.audio.maxRecordingBufferMinutes;
     
     this.client = new Client({
       intents: [
@@ -113,7 +103,7 @@ class YomiageBot {
     // .envの設定に関わらず、SpeechToTextを初期化
     // 実際に使用するかどうかは、この後の起動ログやtranscribeAudioChunkで判断
     try {
-      this.speechToText = new SpeechToText();
+      this.speechToText = new SpeechToText(config.audio);
       this.logger.log(`[Transcription] Service initialized (Whisper).`);
     } catch (error: any) {
       this.logger.error(`[Transcription] Failed to initialize: ${error.message}`);
@@ -133,16 +123,12 @@ class YomiageBot {
       this.syncCommands();
       this.rejoinChannels();
       
-      // バッファを復元
-      this.loadAllBuffers();
-      
-      // 定期的にバッファを保存
-      setInterval(() => {
-        this.saveAllBuffers();
-      }, this.bufferPersistenceInterval);
       
       // 自動的に音声横流しを開始
       this.startAutoStreaming();
+      
+      // パフォーマンス監視を開始
+      this.startPerformanceMonitoring();
     });
     this.client.on('voiceStateUpdate', this.handleVoiceStateUpdate.bind(this));
     this.client.on('interactionCreate', this.handleInteraction.bind(this));
@@ -321,23 +307,6 @@ class YomiageBot {
     const durationSeconds = durationMinutes * 60;
 
     await interaction.deferReply({ ephemeral: true });
-
-    // まずバッファリング機能を試す
-    const bufferedPath = await this.createBufferedReplay(guildId, durationMinutes);
-    
-    if (bufferedPath) {
-      const attachment = new AttachmentBuilder(bufferedPath);
-      const userText = targetUser ? `${targetUser.tag}さんの` : '全員の';
-      console.log(`[Replay] Sending buffered replay for ${durationMinutes} minutes`);
-      await interaction.editReply({
-        content: `過去${durationMinutes}分間の${userText}リプレイ（バッファリング録音、音量調整済み）です。`,
-        files: [attachment],
-      });
-      return;
-    }
-
-    // バッファリングが失敗した場合、従来のファイルベース録音を使用
-    console.log(`[Replay] Buffered replay failed, falling back to file-based replay`);
     
     let allChunks = this.recordedChunks.get(guildId);
     console.log(`[Replay] Guild ${guildId} has ${allChunks?.length || 0} total recorded chunks`);
@@ -397,7 +366,8 @@ class YomiageBot {
     fs.mkdirSync(tempDir, { recursive: true });
 
     try {
-      console.log(`[Replay] Converting ${relevantChunks.length} chunks to WAV...`);
+      const processingStartTime = Date.now();
+      this.logger.log(`[Replay] Converting ${relevantChunks.length} chunks to WAV...`);
       const wavFiles = await Promise.all(relevantChunks.map(async (chunkPath, index) => {
         const wavPath = path.join(tempDir, `${path.basename(chunkPath)}.wav`);
         console.log(`[Replay] Converting chunk ${index + 1}/${relevantChunks.length}: ${path.basename(chunkPath)}`);
@@ -432,9 +402,10 @@ class YomiageBot {
       // 5. Send the final audio as an attachment
       const attachment = new AttachmentBuilder(normalizedPath);
       const userText = targetUser ? `${targetUser.tag}さんの` : '全員の';
-      console.log(`[Replay] Sending replay with ${relevantChunks.length} chunks`);
+      const totalProcessingTime = Date.now() - processingStartTime;
+      this.logger.log(`[Replay] Sending replay with ${relevantChunks.length} chunks (processing took ${totalProcessingTime}ms)`);
       await interaction.editReply({
-        content: `過去${durationMinutes}分間の${userText}リプレイ（ファイルベース、音量調整済み）です。`,
+        content: `過去${durationMinutes}分間の${userText}リプレイ（音量調整済み）です。`,
         files: [attachment],
       });
 
@@ -538,13 +509,6 @@ class YomiageBot {
     
     this.logger.log(`[Recording] Attempting to start recording for guild ${guildId}, channel ${channelId}`);
     
-    // バッファを初期化（ただし、既にバッファが存在する場合は維持する）
-    if (!this.audioBuffers.has(guildId)) {
-      this.audioBuffers.set(guildId, []);
-      this.logger.log(`[Recording] Initialized new audio buffer for guild ${guildId}`);
-    } else {
-      this.logger.log(`[Recording] Using existing audio buffer for guild ${guildId} with ${this.audioBuffers.get(guildId)!.length} chunks.`);
-    }
     
     connection.receiver.speaking.on('start', (userId) => {
       // 既に録音中の場合は、新しい録音を開始しない
@@ -564,7 +528,7 @@ class YomiageBot {
         const audioStream = connection.receiver.subscribe(userId, {
           end: {
             behavior: EndBehaviorType.AfterSilence,
-            duration: 1500, // 3秒から1.5秒に短縮してより多くの音声をキャッチ
+            duration: this.config.audio.silenceDuration,
           },
         });
 
@@ -581,11 +545,6 @@ class YomiageBot {
         this.recordingStates.set(userId, writer);
         this.logger.log(`[Recording] Recording stream setup completed for user ${userId}`);
 
-        // バッファリング用のデータ収集
-        const audioChunks: Buffer[] = [];
-        pcmStream.on('data', (chunk: Buffer) => {
-          audioChunks.push(chunk);
-        });
 
         // ストリームエラーハンドリングを強化
         audioStream.on('error', (error) => {
@@ -633,10 +592,10 @@ class YomiageBot {
         writer.on('finish', async () => {
           this.logger.log(`[Recording] Finished recording for user ${userId}, file: ${chunkPath}`);
           
-          // ファイルサイズをチェック（最小1KB）
+          // ファイルサイズをチェック
           try {
             const stats = fs.statSync(chunkPath);
-            if (stats.size < 1024) {
+            if (stats.size < this.config.audio.minFileSize) {
               this.logger.log(`[Recording] File too small (${stats.size} bytes), skipping: ${chunkPath}`);
               fs.unlinkSync(chunkPath);
               this.recordingStates.delete(userId);
@@ -654,24 +613,6 @@ class YomiageBot {
           recordedChunks.push(chunkPath);
           this.recordedChunks.set(guildId, recordedChunks);
           this.recordingStates.delete(userId);
-          
-          // バッファリング用データを追加
-          if (audioChunks.length > 0) {
-            const bufferData = Buffer.concat(audioChunks);
-            const buffers = this.audioBuffers.get(guildId) || [];
-            buffers.push({
-              data: bufferData,
-              timestamp: Date.now(),
-              userId: userId
-            });
-            this.audioBuffers.set(guildId, buffers);
-            
-            // 古いバッファをクリーンアップ
-            this.cleanupOldBuffers(guildId);
-            
-            // パフォーマンス改善のため、録音ごとの保存は停止
-            // this.saveBuffersToFile(guildId);
-          }
           
           // 録音ファイルの統計を出力
           this.logger.log(`[Recording] Guild ${guildId} now has ${recordedChunks.length} recorded chunks`);
@@ -809,232 +750,48 @@ class YomiageBot {
       });
     }
     this.recordedChunks.delete(guildId);
-    
-    // バッファもクリーンアップ
-    this.audioBuffers.delete(guildId);
-    console.log(`[Recording] Cleared audio buffers for guild ${guildId}`);
   }
 
   private cleanupOldChunks(guildId: string) {
     const chunks = this.recordedChunks.get(guildId);
     if (!chunks) return;
 
+    const startTime = Date.now();
     const now = Date.now();
     const cutoff = now - this.maxRecordingBufferMinutes * 60 * 1000;
-    console.log(`[Cleanup] Checking ${chunks.length} chunks for guild ${guildId}, cutoff time: ${cutoff}`);
+    this.logger.log(`[Cleanup] Checking ${chunks.length} chunks for guild ${guildId}, cutoff time: ${cutoff}`);
 
     const recentChunks = chunks.filter(chunkPath => {
       try {
         const timestamp = parseInt(path.basename(chunkPath).split('-')[1].replace('.pcm', ''));
         if (timestamp < cutoff) {
-          console.log(`[Cleanup] Removing old chunk: ${path.basename(chunkPath)} (timestamp: ${timestamp})`);
+          this.logger.log(`[Cleanup] Removing old chunk: ${path.basename(chunkPath)} (timestamp: ${timestamp})`);
           fs.unlink(chunkPath, (err) => {
-            if (err) console.error(`[Recording] Error deleting old chunk ${chunkPath}:`, err);
-            else console.log(`[Cleanup] Successfully deleted old chunk: ${path.basename(chunkPath)}`);
+            if (err) this.logger.error(`[Recording] Error deleting old chunk ${chunkPath}:`, err);
+            else this.logger.log(`[Cleanup] Successfully deleted old chunk: ${path.basename(chunkPath)}`);
           });
           return false;
         }
         return true;
       } catch (error) {
-        console.error(`[Cleanup] Error parsing timestamp for ${chunkPath}:`, error);
+        this.logger.error(`[Cleanup] Error parsing timestamp for ${chunkPath}:`, error);
         return false;
       }
     });
     
     if (recentChunks.length !== chunks.length) {
-      console.log(`[Cleanup] Removed ${chunks.length - recentChunks.length} old chunks, ${recentChunks.length} remaining`);
+      const cleanupTime = Date.now() - startTime;
+      this.logger.log(`[Cleanup] Removed ${chunks.length - recentChunks.length} old chunks, ${recentChunks.length} remaining (${cleanupTime}ms)`);
     }
     
     this.recordedChunks.set(guildId, recentChunks);
   }
 
-  private cleanupOldBuffers(guildId: string) {
-    const buffers = this.audioBuffers.get(guildId);
-    if (!buffers) return;
 
-    const now = Date.now();
-    const cutoff = now - this.bufferDurationMs;
-    
-    const recentBuffers = buffers.filter(buffer => buffer.timestamp >= cutoff);
-    
-    if (recentBuffers.length !== buffers.length) {
-      console.log(`[BufferCleanup] Removed ${buffers.length - recentBuffers.length} old buffers, ${recentBuffers.length} remaining`);
-    }
-    
-    this.audioBuffers.set(guildId, recentBuffers);
-  }
 
-  // バッファをファイルに保存
-  private saveBuffersToFile(guildId: string) {
-    try {
-      const buffers = this.audioBuffers.get(guildId);
-      if (!buffers || buffers.length === 0) return;
 
-      // バッファ保存ディレクトリを作成
-      if (!fs.existsSync(this.bufferPersistenceDir)) {
-        fs.mkdirSync(this.bufferPersistenceDir, { recursive: true });
-      }
 
-      const bufferFile = path.join(this.bufferPersistenceDir, `${guildId}.json`);
-      const bufferData = {
-        timestamp: Date.now(),
-        guildId: guildId,
-        buffers: buffers.map(buffer => ({
-          data: buffer.data.toString('base64'), // BufferをBase64に変換
-          timestamp: buffer.timestamp,
-          userId: buffer.userId
-        }))
-      };
 
-      fs.writeFileSync(bufferFile, JSON.stringify(bufferData, null, 2));
-      this.logger.log(`[BufferPersistence] Saved ${buffers.length} buffers for guild ${guildId}`);
-    } catch (error) {
-      this.logger.error(`[BufferPersistence] Error saving buffers for guild ${guildId}:`, error);
-    }
-  }
-
-  // バッファをファイルから復元
-  private loadBuffersFromFile(guildId: string) {
-    try {
-      const bufferFile = path.join(this.bufferPersistenceDir, `${guildId}.json`);
-      if (!fs.existsSync(bufferFile)) return;
-
-      const data = JSON.parse(fs.readFileSync(bufferFile, 'utf-8'));
-      const buffers: BufferedAudio[] = data.buffers.map((buffer: any) => ({
-        data: Buffer.from(buffer.data, 'base64'), // Base64からBufferに変換
-        timestamp: buffer.timestamp,
-        userId: buffer.userId
-      }));
-
-      this.audioBuffers.set(guildId, buffers);
-      this.logger.log(`[BufferPersistence] Loaded ${buffers.length} buffers for guild ${guildId}`);
-    } catch (error) {
-      this.logger.error(`[BufferPersistence] Error loading buffers for guild ${guildId}:`, error);
-    }
-  }
-
-  // 全ギルドのバッファを保存
-  private saveAllBuffers() {
-    for (const [guildId] of this.audioBuffers) {
-      this.saveBuffersToFile(guildId);
-    }
-  }
-
-  // 全ギルドのバッファを復元
-  private loadAllBuffers() {
-    try {
-      if (!fs.existsSync(this.bufferPersistenceDir)) return;
-
-      const files = fs.readdirSync(this.bufferPersistenceDir);
-      const bufferFiles = files.filter(file => file.endsWith('.json'));
-
-      for (const file of bufferFiles) {
-        const guildId = file.replace('.json', '');
-        this.loadBuffersFromFile(guildId);
-      }
-
-      this.logger.log(`[BufferPersistence] Loaded buffers from ${bufferFiles.length} files`);
-    } catch (error) {
-      this.logger.error(`[BufferPersistence] Error loading all buffers:`, error);
-    }
-  }
-
-  private async createBufferedReplay(guildId: string, durationMinutes: number): Promise<string | null> {
-    // ユーザーは「会話の合計が5分」のリプレイを求めている。
-    const targetDurationMs = (durationMinutes ?? 5) * 60 * 1000;
-
-    const allBuffers = this.audioBuffers.get(guildId);
-    if (!allBuffers || allBuffers.length === 0) {
-      this.logger.log(`[BufferedReplay] No buffered audio for guild ${guildId}`);
-      return null;
-    }
-
-    // バッファを新しい順（降順）にソート
-    allBuffers.sort((a, b) => b.timestamp - a.timestamp);
-
-    const relevantBuffers: BufferedAudio[] = [];
-    let accumulatedDurationMs = 0;
-    // 1msあたりのバイト数: 48kHz (サンプル/秒) * 2 (チャンネル) * 2 (16bit = 2bytes) / 1000 (ms/s)
-    const bytesPerMs = (48000 * 2 * 2) / 1000;
-
-    for (const buffer of allBuffers) {
-      const bufferDurationMs = buffer.data.length / bytesPerMs;
-      relevantBuffers.push(buffer);
-      accumulatedDurationMs += bufferDurationMs;
-      
-      // 5分以上の音声が集まったらループを抜ける
-      if (accumulatedDurationMs >= targetDurationMs) {
-        break;
-      }
-    }
-
-    if (relevantBuffers.length === 0) {
-      this.logger.log(`[BufferedReplay] No relevant buffers found after filtering.`);
-      return null;
-    }
-
-    this.logger.log(`[BufferedReplay] Found ${relevantBuffers.length} buffers with a total duration of ${Math.round(accumulatedDurationMs / 1000)}s to create replay.`);
-
-    // 再生のために時系列順（昇順）に戻す
-    relevantBuffers.sort((a, b) => a.timestamp - b.timestamp);
-    
-    const tempDir = path.join('temp', 'buffered_replay', uuidv4());
-    fs.mkdirSync(tempDir, { recursive: true });
-
-    try {
-      // 各バッファをWAVファイルに変換
-      const wavFiles = await Promise.all(relevantBuffers.map(async (buffer, index) => {
-        const wavPath = path.join(tempDir, `buffer_${index}.wav`);
-        
-        // PCMデータをWAVファイルに変換
-        const pcmPath = path.join(tempDir, `buffer_${index}.pcm`);
-        fs.writeFileSync(pcmPath, buffer.data);
-        
-        await this.runFfmpeg(`-f s16le -ar 48k -ac 2 -i "${pcmPath}" "${wavPath}"`);
-        fs.unlinkSync(pcmPath); // PCMファイルを削除
-        
-        return wavPath;
-      }));
-
-      if (wavFiles.length === 0) {
-        return null;
-      }
-
-      // 単一のWAVファイルに結合
-      const fileListPath = path.join(tempDir, 'filelist.txt');
-      const fileListContent = wavFiles.map(f => `file '${path.basename(f)}'`).join('\n');
-      fs.writeFileSync(fileListPath, fileListContent);
-
-      const mergedPath = path.join(tempDir, 'merged.wav');
-      this.logger.log(`[BufferedReplay] Merging ${wavFiles.length} WAV files...`);
-      await this.runFfmpeg(`-f concat -safe 0 -i "${fileListPath}" -c copy "${mergedPath}"`);
-
-      // 音量正規化
-      const normalizedPath = path.join(tempDir, 'buffered_replay.wav');
-      this.logger.log(`[BufferedReplay] Normalizing audio...`);
-      
-      const loudnormStats = await this.runFfmpegWithOutput(`-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json -f null -`);
-      const statsJson = loudnormStats.substring(loudnormStats.indexOf('{'), loudnormStats.lastIndexOf('}') + 1);
-      const stats = JSON.parse(statsJson);
-
-      const loudnormCommand = `-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${stats.input_i}:measured_LRA=${stats.input_lra}:measured_TP=${stats.input_tp}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset} -ar 48k "${normalizedPath}"`;
-      await this.runFfmpeg(loudnormCommand);
-
-      return normalizedPath;
-    } catch (error) {
-      this.logger.error('[BufferedReplay] Error creating buffered replay:', error);
-      // エラー時も一時ファイルはクリーンアップ
-      fs.rm(tempDir, { recursive: true, force: true }, (err) => {
-        if (err) this.logger.error(`[BufferedReplay] Error cleaning up temp dir on failure:`, err);
-      });
-      return null;
-    } finally {
-      // 正常終了時もクリーンアップスケジュール
-      setTimeout(() => fs.rm(tempDir, { recursive: true, force: true }, (err) => {
-        if (err) this.logger.error(`[BufferedReplay] Error cleaning up temp dir on success:`, err);
-      }), 60000);
-    }
-  }
 
   private runFfmpeg(command: string): Promise<void> {
     return new Promise((resolve, reject) => exec(`ffmpeg ${command}`, e => e ? reject(e) : resolve()));
@@ -1050,9 +807,6 @@ class YomiageBot {
 
   public async stop() {
     this.logger.log('[Bot] Shutting down...');
-    
-    // 終了時にバッファを保存
-    this.saveAllBuffers();
     
     this.logger.close();
     await this.client.destroy();
@@ -1371,11 +1125,11 @@ class YomiageBot {
 
     // ユーザーごとの最後の発話時間を追跡（音声横流し専用）
     const lastSpeakingTime: Map<string, number> = new Map();
-    const SPEAKING_COOLDOWN = 500; // 1秒から0.5秒に短縮してレスポンスを向上
+    const SPEAKING_COOLDOWN = this.config.audio.streamingSpeakingCooldown;
 
     // 音声バッファリング用
     const audioBuffers: Map<string, Buffer[]> = new Map();
-    const BUFFER_FLUSH_INTERVAL = 100; // 100msごとにバッファをフラッシュ
+    const BUFFER_FLUSH_INTERVAL = this.config.audio.streamingBufferFlushInterval;
 
     // 定期的にバッファをフラッシュ
     setInterval(() => {
@@ -1404,17 +1158,19 @@ class YomiageBot {
       lastSpeakingTime.set(userId, now);
 
       try {
-        // 他のプレイヤーが再生中であれば停止し、新しい話者に切り替える
-        this.streamPlayers.forEach((player, pUserId) => {
-          this.logger.log(`[Stream] New speaker detected. Stopping player for user ${pUserId}.`);
-          player.stop();
-          this.streamPlayers.delete(pUserId);
-        });
+        // 複数話者対応：新しい話者が開始した時、他のプレイヤーを停止せず共存させる
+        // ただし、同一ユーザーの重複プレイヤーは停止
+        const existingPlayer = this.streamPlayers.get(userId);
+        if (existingPlayer) {
+          this.logger.log(`[Stream] User ${userId} already has an active player, stopping it first.`);
+          existingPlayer.stop();
+          this.streamPlayers.delete(userId);
+        }
 
         const audioStream = sourceConnection.receiver.subscribe(userId, {
           end: {
             behavior: EndBehaviorType.AfterSilence,
-            duration: 3000, // 1.5秒から3秒に延長してより安定した録音
+            duration: this.config.audio.silenceDuration,
           },
         });
 
@@ -1454,21 +1210,28 @@ class YomiageBot {
           }
         });
 
-        // エラーハンドリングを復活（クラッシュ防止のため）
+        // エラーハンドリング改善：より寛容なエラー処理
         player.on('error', (error: any) => {
-          // 正常な動作で発生するエラーは完全に無視
-          if ((error.message && error.message.includes('ERR_STREAM_PREMATURE_CLOSE')) ||
-              (error.code && error.code === 'ERR_STREAM_PREMATURE_CLOSE') ||
-              (error.message && error.message.includes('Premature close')) ||
-              (error.message && error.message.includes('ERR_STREAM_PUSH_AFTER_EOF')) ||
-              (error.code && error.code === 'ERR_STREAM_PUSH_AFTER_EOF') ||
-              (error.message && error.message.includes('stream.push() after EOF'))) {
-            // 完全に無視（ログにも記録しない）
+          // ストリーム関連のエラーは無視し、継続動作を優先
+          if ((error.message && (
+              error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
+              error.message.includes('Premature close') ||
+              error.message.includes('ERR_STREAM_PUSH_AFTER_EOF') ||
+              error.message.includes('stream.push() after EOF') ||
+              error.message.includes('ERR_STREAM_DESTROYED')
+            )) || 
+            (error.code && (
+              error.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+              error.code === 'ERR_STREAM_PUSH_AFTER_EOF' ||
+              error.code === 'ERR_STREAM_DESTROYED'
+            ))) {
+            // 正常な終了処理として扱う
+            this.logger.log(`[Stream] Normal stream termination for user ${userId}`);
             return;
           }
-          this.logger.error(`[Stream] Audio player error for user ${userId}:`, error);
-          // エラーが発生したらプレイヤーを管理から削除
-          this.streamPlayers.delete(userId);
+          // 重要なエラーのみログ出力
+          this.logger.warn(`[Stream] Recoverable audio player error for user ${userId}:`, error.message);
+          // エラーが発生してもプレイヤーは削除せず、自然な終了を待つ
         });
 
         audioStream.on('end', () => {
@@ -1485,33 +1248,47 @@ class YomiageBot {
           this.logger.log(`[Stream] Audio stream destroyed for user ${userId}`);
         });
 
-        // 音声ストリームのエラーハンドリング（クラッシュ防止のため）
+        // 音声ストリームのエラーハンドリング改善
         audioStream.on('error', (error: any) => {
-          // 正常な動作で発生するエラーは完全に無視
-          if ((error.message && error.message.includes('ERR_STREAM_PREMATURE_CLOSE')) ||
-              (error.code && error.code === 'ERR_STREAM_PREMATURE_CLOSE') ||
-              (error.message && error.message.includes('Premature close')) ||
-              (error.message && error.message.includes('ERR_STREAM_PUSH_AFTER_EOF')) ||
-              (error.code && error.code === 'ERR_STREAM_PUSH_AFTER_EOF') ||
-              (error.message && error.message.includes('stream.push() after EOF'))) {
-            // 完全に無視（ログにも記録しない）
+          // ストリーム関連のエラーは正常な終了として扱う
+          if ((error.message && (
+              error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
+              error.message.includes('Premature close') ||
+              error.message.includes('ERR_STREAM_PUSH_AFTER_EOF') ||
+              error.message.includes('stream.push() after EOF') ||
+              error.message.includes('ERR_STREAM_DESTROYED')
+            )) || 
+            (error.code && (
+              error.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+              error.code === 'ERR_STREAM_PUSH_AFTER_EOF' ||
+              error.code === 'ERR_STREAM_DESTROYED'
+            ))) {
+            this.logger.log(`[Stream] Normal audio stream termination for user ${userId}`);
             return;
           }
-          this.logger.error(`[Stream] Audio stream error for user ${userId}:`, error);
+          // 重要なエラーのみ警告として記録
+          this.logger.warn(`[Stream] Audio stream issue for user ${userId}:`, error.message);
         });
 
       } catch (error: any) {
-        // 正常な動作で発生するエラーは完全に無視
-        if ((error.message && error.message.includes('ERR_STREAM_PREMATURE_CLOSE')) ||
-            (error.code && error.code === 'ERR_STREAM_PREMATURE_CLOSE') ||
-            (error.message && error.message.includes('Premature close')) ||
-            (error.message && error.message.includes('ERR_STREAM_PUSH_AFTER_EOF')) ||
-            (error.code && error.code === 'ERR_STREAM_PUSH_AFTER_EOF') ||
-            (error.message && error.message.includes('stream.push() after EOF'))) {
-          // 完全に無視（ログにも記録しない）
+        // ストリーム作成エラーの寛容な処理
+        if ((error.message && (
+            error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
+            error.message.includes('Premature close') ||
+            error.message.includes('ERR_STREAM_PUSH_AFTER_EOF') ||
+            error.message.includes('stream.push() after EOF') ||
+            error.message.includes('ERR_STREAM_DESTROYED')
+          )) || 
+          (error.code && (
+            error.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+            error.code === 'ERR_STREAM_PUSH_AFTER_EOF' ||
+            error.code === 'ERR_STREAM_DESTROYED'
+          ))) {
+          this.logger.log(`[Stream] Normal stream creation termination for user ${userId}`);
           return;
         }
-        this.logger.error(`[Stream] Error creating audio stream for user ${userId}:`, error);
+        // 重要なエラーのみログ出力し、処理は継続
+        this.logger.warn(`[Stream] Stream creation issue for user ${userId}:`, error.message);
       }
     });
 
@@ -1521,6 +1298,38 @@ class YomiageBot {
     });
 
     this.logger.log(`[Stream] Audio streaming setup completed for session: ${sessionKey}`);
+  }
+
+  private startPerformanceMonitoring() {
+    this.logger.log('[Performance] Starting performance monitoring...');
+    
+    // 5分ごとにパフォーマンス統計をログ出力
+    setInterval(() => {
+      const memoryUsage = process.memoryUsage();
+      const uptime = process.uptime();
+      
+      // メモリ使用量を MB 単位で表示
+      const stats = {
+        uptime: Math.floor(uptime / 60), // 分単位
+        memory: {
+          rss: Math.round(memoryUsage.rss / 1024 / 1024), // MB
+          heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024), // MB
+          heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024), // MB
+        },
+        connections: this.connections.size,
+        recordingStates: this.recordingStates.size,
+        streamPlayers: this.streamPlayers.size,
+        recordedChunks: Array.from(this.recordedChunks.values()).reduce((sum, chunks) => sum + chunks.length, 0),
+      };
+      
+      this.logger.log(`[Performance] Stats - Uptime: ${stats.uptime}min, Memory: ${stats.memory.heapUsed}/${stats.memory.heapTotal}MB, Connections: ${stats.connections}, Recording: ${stats.recordingStates}, Streaming: ${stats.streamPlayers}, Chunks: ${stats.recordedChunks}`);
+      
+      // メモリ使用量が高い場合は警告
+      if (stats.memory.heapUsed > 1024) { // 1GB以上
+        this.logger.warn(`[Performance] High memory usage detected: ${stats.memory.heapUsed}MB`);
+      }
+      
+    }, 5 * 60 * 1000); // 5分間隔
   }
 }
 
