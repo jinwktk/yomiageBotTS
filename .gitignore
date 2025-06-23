@@ -76,4 +76,7 @@ rvc_models/
 
 # Build output
 dist/
-build/ 
+build/
+
+# Restart trigger files
+src/.restart-trigger 
