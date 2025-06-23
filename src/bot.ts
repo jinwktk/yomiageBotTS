@@ -399,48 +399,50 @@ class YomiageBot {
     try {
       console.log(`[Replay] Converting ${relevantChunks.length} chunks to WAV...`);
       const wavFiles = await Promise.all(relevantChunks.map(async (chunkPath, index) => {
-        const wavPath = path.join(tempDir, `buffer_${index}.wav`);
-        
-        // PCMデータをWAVファイルに変換
-        const pcmPath = path.join(tempDir, `buffer_${index}.pcm`);
-        fs.writeFileSync(pcmPath, fs.readFileSync(chunkPath));
-        
-        await this.runFfmpeg(`-f s16le -ar 48k -ac 2 -i "${pcmPath}" "${wavPath}"`);
-        fs.unlinkSync(pcmPath); // PCMファイルを削除
-        
+        const wavPath = path.join(tempDir, `${path.basename(chunkPath)}.wav`);
+        console.log(`[Replay] Converting chunk ${index + 1}/${relevantChunks.length}: ${path.basename(chunkPath)}`);
+        await this.runFfmpeg(`-f s16le -ar 48k -ac 2 -i "${chunkPath}" "${wavPath}"`);
         return wavPath;
       }));
 
-      if (wavFiles.length === 0) {
-        return null;
-      }
-
-      // 単一のWAVファイルに結合
       const fileListPath = path.join(tempDir, 'filelist.txt');
       const fileListContent = wavFiles.map(f => `file '${path.basename(f)}'`).join('\n');
       fs.writeFileSync(fileListPath, fileListContent);
 
+      // 3. Merge WAV files into a single WAV file
       const mergedPath = path.join(tempDir, 'merged.wav');
       console.log(`[Replay] Merging ${wavFiles.length} WAV files...`);
       await this.runFfmpeg(`-f concat -safe 0 -i "${fileListPath}" -c copy "${mergedPath}"`);
-
-      // 音量正規化
+      
+      // 4. Normalize the audio using loudnorm filter
       const normalizedPath = path.join(tempDir, 'replay.wav');
       console.log(`[Replay] Normalizing audio...`);
-      
+      // Note: This is a two-pass loudnorm process for better results.
+      // Pass 1: Analyze the audio and get normalization stats
       const loudnormStats = await this.runFfmpegWithOutput(`-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json -f null -`);
+      
+      // Extract the stats from FFmpeg's stderr
       const statsJson = loudnormStats.substring(loudnormStats.indexOf('{'), loudnormStats.lastIndexOf('}') + 1);
       const stats = JSON.parse(statsJson);
 
-      const loudnormCommand = `-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${stats.input_i}:measured_LRA=${stats.input_lra}:measured_TP=${stats.input_tp}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset} -ar 48k "${normalizedPath}"`;
+      // Pass 2: Apply the normalization using the stats from pass 1
+      const loudnormCommand = `-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${stats.input_i}:measured_LRA=${stats.input_lra}:measured_TP=${stats.input_tp}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset} -ar 48k "${normalizedPath}"`
       await this.runFfmpeg(loudnormCommand);
 
-      return normalizedPath;
+      // 5. Send the final audio as an attachment
+      const attachment = new AttachmentBuilder(normalizedPath);
+      const userText = targetUser ? `${targetUser.tag}さんの` : '全員の';
+      console.log(`[Replay] Sending replay with ${relevantChunks.length} chunks`);
+      await interaction.editReply({
+        content: `過去${durationMinutes}分間の${userText}リプレイ（ファイルベース、音量調整済み）です。`,
+        files: [attachment],
+      });
+
     } catch (error) {
       console.error('[Replay] Error processing replay:', error);
-      return null;
+      await interaction.editReply('リプレイの生成に失敗しました。');
     } finally {
-      // クリーンアップスケジュール
+      // 5. Clean up temp directory
       setTimeout(() => fs.rm(tempDir, { recursive: true, force: true }, () => {}), 60000);
     }
   }
@@ -495,22 +497,14 @@ class YomiageBot {
       try {
         const guild = await this.client.guilds.fetch(guildId);
         const channel = await guild.channels.fetch(session[guildId]);
-        if (channel && channel.isVoiceBased()) {
-          const memberCount = channel.members.filter(m => !m.user.bot).size;
-          if (memberCount > 0) {
-            this.logger.log(`[Rejoin] Rejoining ${channel.name} (${memberCount} users present).`);
-            await this.joinVoiceChannelByIds(guildId, channel.id);
-          } else {
-            this.logger.log(`[Rejoin] Skipping rejoin for ${channel.name} (0 users present).`);
-            // 0人の場合はセッションから削除
-            await this.saveSession(guildId, null);
-          }
+        if (channel && channel.isVoiceBased() && channel.members.filter(m => !m.user.bot).size > 0) {
+          console.log(`Rejoining ${channel.name} (users present).`);
+          await this.joinVoiceChannelByIds(guildId, channel.id);
         } else {
-          this.logger.log(`[Rejoin] Skipping rejoin for ${channel ? channel.name : `ID: ${session[guildId]}`} (not a voice channel or not found).`);
-          await this.saveSession(guildId, null);
+          console.log(`Skipping rejoin for ${channel ? channel.name : `ID: ${session[guildId]}`} (empty or not found).`);
         }
       } catch (error) {
-        this.logger.error(`[Rejoin] Failed to rejoin for guild ${guildId}:`, error);
+        console.error(`Failed to rejoin for guild ${guildId}:`, error);
         await this.saveSession(guildId, null);
       }
     }
@@ -1012,12 +1006,12 @@ class YomiageBot {
       fs.writeFileSync(fileListPath, fileListContent);
 
       const mergedPath = path.join(tempDir, 'merged.wav');
-      console.log(`[Replay] Merging ${wavFiles.length} WAV files...`);
+      this.logger.log(`[BufferedReplay] Merging ${wavFiles.length} WAV files...`);
       await this.runFfmpeg(`-f concat -safe 0 -i "${fileListPath}" -c copy "${mergedPath}"`);
 
       // 音量正規化
-      const normalizedPath = path.join(tempDir, 'replay.wav');
-      console.log(`[Replay] Normalizing audio...`);
+      const normalizedPath = path.join(tempDir, 'buffered_replay.wav');
+      this.logger.log(`[BufferedReplay] Normalizing audio...`);
       
       const loudnormStats = await this.runFfmpegWithOutput(`-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json -f null -`);
       const statsJson = loudnormStats.substring(loudnormStats.indexOf('{'), loudnormStats.lastIndexOf('}') + 1);
@@ -1028,11 +1022,17 @@ class YomiageBot {
 
       return normalizedPath;
     } catch (error) {
-      console.error('[Replay] Error processing replay:', error);
+      this.logger.error('[BufferedReplay] Error creating buffered replay:', error);
+      // エラー時も一時ファイルはクリーンアップ
+      fs.rm(tempDir, { recursive: true, force: true }, (err) => {
+        if (err) this.logger.error(`[BufferedReplay] Error cleaning up temp dir on failure:`, err);
+      });
       return null;
     } finally {
-      // クリーンアップスケジュール
-      setTimeout(() => fs.rm(tempDir, { recursive: true, force: true }, () => {}), 60000);
+      // 正常終了時もクリーンアップスケジュール
+      setTimeout(() => fs.rm(tempDir, { recursive: true, force: true }, (err) => {
+        if (err) this.logger.error(`[BufferedReplay] Error cleaning up temp dir on success:`, err);
+      }), 60000);
     }
   }
 
@@ -1230,13 +1230,6 @@ class YomiageBot {
         return;
       }
 
-      // ソースチャンネルの人数をチェック
-      const sourceMemberCount = sourceChannel.members.filter(m => !m.user.bot).size;
-      if (sourceMemberCount === 0) {
-        this.logger.log('[AutoStream] Source channel is empty (0 users), skipping auto-streaming');
-        return;
-      }
-
       // ターゲットサーバーとチャンネルの存在確認
       const targetGuild = await this.client.guilds.fetch(targetGuildId);
       const targetChannel = await targetGuild.channels.fetch(targetChannelId);
@@ -1244,8 +1237,6 @@ class YomiageBot {
         this.logger.error('[AutoStream] Target voice channel not found');
         return;
       }
-
-      this.logger.log(`[AutoStream] Source channel has ${sourceMemberCount} users, proceeding with streaming`);
 
       // 既存の接続をチェック（通常の録音機能との競合を避ける）
       const existingSourceConnection = getVoiceConnection(sourceGuildId);
@@ -1300,34 +1291,11 @@ class YomiageBot {
 
       this.logger.log('[AutoStream] Audio streaming started successfully');
 
-      // 定期的に接続状態と人数をチェック
-      setInterval(async () => {
+      // 定期的に接続状態をチェック
+      setInterval(() => {
         this.logger.log(`[AutoStream] Connection status check:`);
         this.logger.log(`  Source: ${sourceConnection.state.status}`);
         this.logger.log(`  Target: ${targetConnection.state.status}`);
-        
-        // ソースチャンネルの人数を再チェック
-        try {
-          const currentSourceChannel = await sourceGuild.channels.fetch(sourceChannelId);
-          if (currentSourceChannel && currentSourceChannel.isVoiceBased()) {
-            const currentMemberCount = currentSourceChannel.members.filter(m => !m.user.bot).size;
-            this.logger.log(`[AutoStream] Source channel member count: ${currentMemberCount}`);
-            
-            if (currentMemberCount === 0) {
-              this.logger.log('[AutoStream] Source channel is now empty, stopping streaming');
-              // 接続を切断
-              if (sourceConnection) {
-                sourceConnection.destroy();
-              }
-              if (targetConnection) {
-                targetConnection.destroy();
-              }
-              return;
-            }
-          }
-        } catch (error) {
-          this.logger.error('[AutoStream] Error checking source channel member count:', error);
-        }
         
         if (sourceConnection.state.status !== VoiceConnectionStatus.Ready) {
           this.logger.warn(`[AutoStream] Source connection not ready: ${sourceConnection.state.status}`);
