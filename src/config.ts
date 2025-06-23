@@ -8,6 +8,15 @@ if (env.error) {
 
 const loadedEnv = env.parsed || {};
 
+export interface GitHubMonitorConfig {
+  enabled: boolean;
+  repositoryOwner: string;
+  repositoryName: string;
+  branch: string;
+  checkIntervalMs: number;
+  apiTimeout: number;
+}
+
 export interface Config {
   discordToken: string;
   applicationId: string;
@@ -25,6 +34,7 @@ export interface Config {
   serverPort: number;
   transcriptionChannelId: string;
   transcriptionEnabled: boolean;
+  githubMonitor: GitHubMonitorConfig;
 }
 
 export const createConfig = (): Config => {
@@ -57,6 +67,16 @@ export const createConfig = (): Config => {
     // 文字起こし設定（デフォルト値）
     transcriptionChannelId: '1385376893997678602',
     transcriptionEnabled: true,
+    
+    // GitHub監視設定
+    githubMonitor: {
+      enabled: process.env.GITHUB_MONITOR_ENABLED !== 'false',
+      repositoryOwner: process.env.GITHUB_REPO_OWNER || 'jinwktk',
+      repositoryName: process.env.GITHUB_REPO_NAME || 'yomiageBotTS',
+      branch: process.env.GITHUB_BRANCH || 'main',
+      checkIntervalMs: parseInt(process.env.GITHUB_CHECK_INTERVAL_MS || '30000'),
+      apiTimeout: parseInt(process.env.GITHUB_API_TIMEOUT_MS || '10000'),
+    },
   };
 };
 

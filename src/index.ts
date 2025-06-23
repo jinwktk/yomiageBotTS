@@ -2,53 +2,57 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import YomiageBot from './bot.js';
-import { createConfig } from './config.js';
-import { GitHubMonitor } from './github-monitor.js';
-import { UpdateHandler } from './update-handler.js';
+import { createConfig, type Config } from './config.js';
+import { GitHubMonitorController } from './services/github-monitor-controller.service.js';
+import { GitHubMonitorService } from './services/github-monitor.service.js';
+import { UpdateHandlerService } from './services/update-handler.service.js';
+import { GitHubApiService } from './services/github-api.service.js';
+import { LoggerService } from './services/logger.service.js';
 
-const config = createConfig();
-const bot = new YomiageBot(config);
-
-// GitHub監視とアップデート処理を初期化
-const initializeGitHubMonitoring = async () => {
+async function main() {
+  const config = createConfig();
+  const logger = LoggerService.create('App');
+  
   try {
-    const monitor = new GitHubMonitor('jinwktk', 'yomiageBotTS', 'main');
-    const updateHandler = new UpdateHandler();
-    
-    // 現在のコミットSHAで初期化
-    await monitor.initialize();
-    
-    // 更新検出時のコールバック
-    const onUpdate = (newSha: string) => {
-      updateHandler.handleUpdate(newSha);
-    };
-    
-    // 30秒間隔で監視開始
-    monitor.start(onUpdate, 30000);
-    
-    console.log('GitHub監視を開始しました。');
-    
-    // プロセス終了時のクリーンアップ
-    process.on('SIGINT', () => {
-      console.log('\nアプリケーションを終了します...');
-      monitor.stop();
-      process.exit(0);
-    });
-    
-    process.on('SIGTERM', () => {
-      console.log('\nアプリケーションを終了します...');
-      monitor.stop();
-      process.exit(0);
-    });
+    // ボット起動
+    const bot = new YomiageBot(config);
+    await bot.start();
+    logger.info('Discord Bot を起動しました');
+
+    // GitHub監視を初期化（オプション）
+    await initializeGitHubMonitoring(config, logger);
     
   } catch (error) {
-    console.error('GitHub監視の初期化に失敗しました:', error);
-    console.log('GitHub監視なしでボットを起動します。');
+    logger.error('アプリケーションの起動に失敗しました:', error);
+    process.exit(1);
   }
-};
+}
 
-// ボット起動
-bot.start().catch(console.error);
+async function initializeGitHubMonitoring(config: Config, logger: LoggerService) {
+  if (!config.githubMonitor.enabled) {
+    logger.info('GitHub監視は無効です');
+    return;
+  }
 
-// GitHub監視を開始
-initializeGitHubMonitoring(); 
+  try {
+    // 依存性注入でサービスを構築
+    const githubLogger = LoggerService.create('GitHub');
+    const githubApi = new GitHubApiService(config.githubMonitor.apiTimeout, githubLogger);
+    const monitor = new GitHubMonitorService(config.githubMonitor, githubApi, githubLogger);
+    const updateHandler = new UpdateHandlerService(githubLogger);
+
+    // コントローラー作成と開始
+    await GitHubMonitorController.createAndStart(
+      config.githubMonitor,
+      monitor,
+      updateHandler,
+      githubLogger
+    );
+    
+  } catch (error) {
+    logger.warn('GitHub監視の初期化に失敗しました。監視なしで続行します:', error);
+  }
+}
+
+// アプリケーション開始
+main(); 

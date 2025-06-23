@@ -7,13 +7,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "start:monitor": "npm run build && node dist/index.js",
     "dev": "nodemon",
-    "dev:win": "nodemon",
-    "dev:ts": "nodemon --exec \"ts-node --esm src/index.ts\"",
-    "dev:monitor": "nodemon --exec \"ts-node --esm src/index.ts\"",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "lint": "echo \"Linting not configured\"",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
