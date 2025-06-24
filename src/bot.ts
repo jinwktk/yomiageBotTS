@@ -80,6 +80,10 @@ class YomiageBot {
   private streamConnections: Map<string, any> = new Map();
   // 音声横流し用のプレイヤー管理
   private streamPlayers: Map<string, AudioPlayer> = new Map();
+  // タイマー管理
+  private timers: Map<string, NodeJS.Timeout> = new Map();
+  // 音声横流し状態管理
+  private isStreamingActive: Map<string, boolean> = new Map();
   // ログ管理
   private logger: LogManager;
 
@@ -147,6 +151,24 @@ class YomiageBot {
     process.on('unhandledRejection', (reason) => {
       this.logger.error('[Global] Unhandled Rejection:', reason);
       this.logger.error('[Global] Rejection time:', new Date().toISOString());
+    });
+
+    // プロセス終了時のクリーンアップ
+    process.on('SIGINT', () => {
+      this.logger.log('[Process] Received SIGINT, shutting down gracefully...');
+      this.cleanupResources();
+      process.exit(0);
+    });
+
+    process.on('SIGTERM', () => {
+      this.logger.log('[Process] Received SIGTERM, shutting down gracefully...');
+      this.cleanupResources();
+      process.exit(0);
+    });
+
+    process.on('beforeExit', () => {
+      this.logger.log('[Process] Before exit, performing cleanup...');
+      this.cleanupResources();
     });
   }
 
@@ -994,8 +1016,18 @@ class YomiageBot {
     const sourceChannelId = '1319432294762545162';
     const targetGuildId = '813783748566581249';
     const targetChannelId = '813783749153259606';
+    const sessionKey = 'auto';
 
     this.logger.log('[AutoStream] Starting automatic audio streaming...');
+
+    // 重複実行防止チェック
+    if (this.isStreamingActive.get(sessionKey)) {
+      this.logger.log('[AutoStream] Streaming is already active, aborting');
+      return;
+    }
+
+    // ストリーミング状態を設定
+    this.isStreamingActive.set(sessionKey, true);
 
     try {
       // ソースサーバーとチャンネルの存在確認
@@ -1080,8 +1112,8 @@ class YomiageBot {
 
       this.logger.log('[AutoStream] Audio streaming started successfully');
 
-      // 定期的に接続状態をチェック
-      setInterval(() => {
+      // 定期的に接続状態をチェック（タイマーID管理）
+      const connectionCheckTimer = setInterval(() => {
         this.logger.log(`[AutoStream] Connection status check:`);
         this.logger.log(`  Source: ${sourceConnection.state.status}`);
         this.logger.log(`  Target: ${targetConnection.state.status}`);
@@ -1097,9 +1129,14 @@ class YomiageBot {
           this.reconnectTargetChannel(targetGuildId, targetChannelId, targetGuild);
         }
       }, 30000); // 30秒ごとにチェック
+      
+      // タイマーIDを保存
+      this.timers.set('autoStream_connectionCheck', connectionCheckTimer);
 
     } catch (error) {
       this.logger.error('[AutoStream] Error starting automatic streaming:', error);
+      // エラー時はストリーミング状態をクリア
+      this.isStreamingActive.set(sessionKey, false);
     }
   }
 
@@ -1166,8 +1203,8 @@ class YomiageBot {
     const audioBuffers: Map<string, Buffer[]> = new Map();
     const BUFFER_FLUSH_INTERVAL = this.config.audio.streamingBufferFlushInterval;
 
-    // 定期的にバッファをフラッシュ
-    setInterval(() => {
+    // 定期的にバッファをフラッシュ（タイマーID管理）
+    const bufferFlushTimer = setInterval(() => {
       for (const [userId, buffers] of audioBuffers.entries()) {
         if (buffers.length > 0) {
           const player = this.streamPlayers.get(userId);
@@ -1178,6 +1215,9 @@ class YomiageBot {
         }
       }
     }, BUFFER_FLUSH_INTERVAL);
+    
+    // タイマーIDを保存
+    this.timers.set(`${sessionKey}_bufferFlush`, bufferFlushTimer);
 
     // ソースチャンネルの音声を受信
     sourceConnection.receiver.speaking.on('start', (userId: string) => {
@@ -1338,8 +1378,15 @@ class YomiageBot {
   private startPerformanceMonitoring() {
     this.logger.log('[Performance] Starting performance monitoring...');
     
+    // 既存のパフォーマンス監視タイマーをクリア
+    const existingTimer = this.timers.get('performance_monitoring');
+    if (existingTimer) {
+      clearInterval(existingTimer);
+      this.timers.delete('performance_monitoring');
+    }
+    
     // 5分ごとにパフォーマンス統計をログ出力
-    setInterval(() => {
+    const performanceTimer = setInterval(() => {
       const memoryUsage = process.memoryUsage();
       const uptime = process.uptime();
       
@@ -1354,26 +1401,45 @@ class YomiageBot {
         connections: this.connections.size,
         recordingStates: this.recordingStates.size,
         streamPlayers: this.streamPlayers.size,
+        timers: this.timers.size,
         recordedChunks: Array.from(this.recordedChunks.values()).reduce((sum, chunks) => sum + chunks.length, 0),
       };
       
-      this.logger.log(`[Performance] Stats - Uptime: ${stats.uptime}min, Memory: ${stats.memory.heapUsed}/${stats.memory.heapTotal}MB, Connections: ${stats.connections}, Recording: ${stats.recordingStates}, Streaming: ${stats.streamPlayers}, Chunks: ${stats.recordedChunks}`);
+      this.logger.log(`[Performance] Stats - Uptime: ${stats.uptime}min, Memory: ${stats.memory.heapUsed}/${stats.memory.heapTotal}MB, Connections: ${stats.connections}, Recording: ${stats.recordingStates}, Streaming: ${stats.streamPlayers}, Timers: ${stats.timers}, Chunks: ${stats.recordedChunks}`);
       
       // メモリ使用量が高い場合は警告
       if (stats.memory.heapUsed > 1024) { // 1GB以上
         this.logger.warn(`[Performance] High memory usage detected: ${stats.memory.heapUsed}MB`);
       }
       
+      // タイマー数が多すぎる場合は警告
+      if (stats.timers > 10) {
+        this.logger.warn(`[Performance] High timer count detected: ${stats.timers}`);
+      }
+      
     }, 5 * 60 * 1000); // 5分間隔
+    
+    // タイマーIDを保存
+    this.timers.set('performance_monitoring', performanceTimer);
   }
 
   private startEmptyChannelMonitoring() {
     this.logger.log('[EmptyMonitor] Starting empty channel monitoring...');
     
+    // 既存の空チャンネル監視タイマーをクリア
+    const existingTimer = this.timers.get('emptyChannel_monitoring');
+    if (existingTimer) {
+      clearInterval(existingTimer);
+      this.timers.delete('emptyChannel_monitoring');
+    }
+    
     // 5分ごとに空チャンネルをチェック
-    setInterval(async () => {
+    const emptyChannelTimer = setInterval(async () => {
       await this.checkEmptyChannelsAndLeave();
     }, 5 * 60 * 1000); // 5分間隔
+    
+    // タイマーIDを保存
+    this.timers.set('emptyChannel_monitoring', emptyChannelTimer);
   }
 
   private async checkEmptyChannelsAndLeave() {
@@ -1512,6 +1578,104 @@ class YomiageBot {
       this.logger.log(`[StreamStop] Successfully stopped streaming session ${sessionId}`);
     } catch (error) {
       this.logger.error(`[StreamStop] Error stopping streaming session ${sessionId}:`, error);
+    }
+  }
+
+  private async stopAutoStreaming(reason: string = 'Manual stop') {
+    try {
+      this.logger.log(`[AutoStream] Stopping automatic streaming: ${reason}`);
+
+      // 全てのタイマーを停止
+      for (const [key, timer] of this.timers.entries()) {
+        if (key.startsWith('autoStream') || key.startsWith('performance') || key.startsWith('emptyChannel')) {
+          clearInterval(timer);
+          this.timers.delete(key);
+          this.logger.log(`[AutoStream] Cleared timer: ${key}`);
+        }
+      }
+
+      // 音声横流し状態をクリア
+      this.isStreamingActive.clear();
+
+      // 全てのストリーミングセッションを停止
+      const sessionIds = Array.from(this.streamSessions.keys());
+      for (const sessionId of sessionIds) {
+        await this.stopStreamingSession(sessionId, reason);
+      }
+
+      // 全てのストリーミングプレイヤーを停止
+      for (const [userId, player] of this.streamPlayers.entries()) {
+        try {
+          player.stop();
+          this.streamPlayers.delete(userId);
+          this.logger.log(`[AutoStream] Stopped streaming player for user ${userId}`);
+        } catch (error) {
+          this.logger.error(`[AutoStream] Error stopping player for user ${userId}:`, error);
+        }
+      }
+
+      // ストリーミング関連の接続をクリア
+      this.streamConnections.clear();
+
+      this.logger.log('[AutoStream] Successfully stopped all streaming activities');
+    } catch (error) {
+      this.logger.error('[AutoStream] Error stopping automatic streaming:', error);
+    }
+  }
+
+  private cleanupResources() {
+    try {
+      this.logger.log('[Cleanup] Starting resource cleanup...');
+
+      // 全てのタイマーをクリア
+      for (const [key, timer] of this.timers.entries()) {
+        clearInterval(timer);
+        this.logger.log(`[Cleanup] Cleared timer: ${key}`);
+      }
+      this.timers.clear();
+
+      // 全ての音声プレイヤーを停止
+      for (const [guildId, player] of this.audioPlayers.entries()) {
+        try {
+          player.stop();
+          this.logger.log(`[Cleanup] Stopped audio player for guild ${guildId}`);
+        } catch (error) {
+          this.logger.error(`[Cleanup] Error stopping audio player for guild ${guildId}:`, error);
+        }
+      }
+      this.audioPlayers.clear();
+
+      // 全てのストリーミングプレイヤーを停止
+      for (const [userId, player] of this.streamPlayers.entries()) {
+        try {
+          player.stop();
+          this.logger.log(`[Cleanup] Stopped streaming player for user ${userId}`);
+        } catch (error) {
+          this.logger.error(`[Cleanup] Error stopping streaming player for user ${userId}:`, error);
+        }
+      }
+      this.streamPlayers.clear();
+
+      // 録音状態をクリア
+      for (const [guildId, writeStream] of this.recordingStates.entries()) {
+        try {
+          writeStream.end();
+          this.logger.log(`[Cleanup] Ended recording stream for guild ${guildId}`);
+        } catch (error) {
+          this.logger.error(`[Cleanup] Error ending recording stream for guild ${guildId}:`, error);
+        }
+      }
+      this.recordingStates.clear();
+
+      // 状態管理マップをクリア
+      this.isStreamingActive.clear();
+      this.isPlaying.clear();
+      this.recordedChunks.clear();
+      this.audioQueues.clear();
+
+      this.logger.log('[Cleanup] Resource cleanup completed');
+    } catch (error) {
+      this.logger.error('[Cleanup] Error during resource cleanup:', error);
     }
   }
 
