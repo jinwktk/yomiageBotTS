@@ -1,5 +1,5 @@
-import { UpdateHandlerService } from '../services/update-handler.service.js';
-import type { ILogger } from '../interfaces/github-monitor.interface.js';
+import { UpdateHandlerService } from '../services/update-handler.service';
+import type { ILogger } from '../interfaces/github-monitor.interface';
 import { jest } from '@jest/globals';
 import { exec } from 'child_process';
 import { promisify } from 'util';

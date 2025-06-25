@@ -1,4 +1,4 @@
-import type { IGitHubApi, GitHubCommit, ILogger } from '../interfaces/github-monitor.interface.js';
+import type { IGitHubApi, GitHubCommit, ILogger } from '../interfaces/github-monitor.interface';
 
 export class GitHubApiService implements IGitHubApi {
   private readonly timeout: number;

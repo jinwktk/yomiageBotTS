@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import FormData from 'form-data';
 import axios from 'axios';
-import type { AudioConfig } from './config.js';
+import type { AudioConfig } from './config';
 
 const execAsync = promisify(exec);
 

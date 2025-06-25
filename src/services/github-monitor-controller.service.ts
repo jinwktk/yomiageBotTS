@@ -1,5 +1,5 @@
-import type { IGitHubMonitor, IUpdateHandler, ILogger } from '../interfaces/github-monitor.interface.js';
-import type { GitHubMonitorConfig } from '../config.js';
+import type { IGitHubMonitor, IUpdateHandler, ILogger } from '../interfaces/github-monitor.interface';
+import type { GitHubMonitorConfig } from '../config';
 
 export class GitHubMonitorController {
   private readonly config: GitHubMonitorConfig;

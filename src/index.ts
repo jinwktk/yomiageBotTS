@@ -1,14 +1,14 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import YomiageBot from './bot.js';
-import { createConfig, type Config } from './config.js';
-import { GitHubMonitorController } from './services/github-monitor-controller.service.js';
-import { GitHubMonitorService } from './services/github-monitor.service.js';
-import { UpdateHandlerService } from './services/update-handler.service.js';
-import { GitHubApiService } from './services/github-api.service.js';
-import { GitHubWebHookHandlerService } from './services/github-webhook-handler.service.js';
-import { LoggerService } from './services/logger.service.js';
+import YomiageBot from './bot';
+import { createConfig, type Config } from './config';
+import { GitHubMonitorController } from './services/github-monitor-controller.service';
+import { GitHubMonitorService } from './services/github-monitor.service';
+import { UpdateHandlerService } from './services/update-handler.service';
+import { GitHubApiService } from './services/github-api.service';
+import { GitHubWebHookHandlerService } from './services/github-webhook-handler.service';
+import { LoggerService } from './services/logger.service';
 
 async function main() {
   const config = createConfig();

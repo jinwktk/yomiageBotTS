@@ -1,6 +1,6 @@
-import { GitHubMonitorService } from '../services/github-monitor.service.js';
-import type { IGitHubApi, ILogger, GitHubCommit } from '../interfaces/github-monitor.interface.js';
-import type { GitHubMonitorConfig } from '../config.js';
+import { GitHubMonitorService } from '../services/github-monitor.service';
+import type { IGitHubApi, ILogger, GitHubCommit } from '../interfaces/github-monitor.interface';
+import type { GitHubMonitorConfig } from '../config';
 import { jest } from '@jest/globals';
 
 describe('GitHubMonitorService', () => {
