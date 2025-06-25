@@ -64,7 +64,7 @@ export const createConfig = (): Config => {
     
     // RVC設定（デフォルト値）
     rvcHost: '127.0.0.1',
-    rvcPort: 7865,
+    rvcPort: 7897,
     rvcDefaultModel: 'omochiv2',
     rvcDisabled: false,
     rvcModelsPath: 'E:\\RVC1006Nvidia\\RVC1006Nvidia\\assets\\weights',
