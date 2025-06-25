@@ -569,34 +569,68 @@ class YomiageBot {
         const chunkPath = path.join(tempDir, `${userId}-${Date.now()}.pcm`);
         this.logger.log(`[Recording] Recording file path: ${chunkPath}`);
 
-        const audioStream = connection.receiver.subscribe(userId, {
-          end: {
-            behavior: EndBehaviorType.AfterSilence,
-            duration: this.config.audio.silenceDuration,
-          },
-        });
+        let audioStream;
+        try {
+          audioStream = connection.receiver.subscribe(userId, {
+            end: {
+              behavior: EndBehaviorType.AfterSilence,
+              duration: this.config.audio.silenceDuration,
+            },
+          });
 
-        // 音声ストリームのバッファリングを改善
-        audioStream.setMaxListeners(0); // リスナー制限を解除
+          // 音声ストリームのバッファリングを改善
+          audioStream.setMaxListeners(0); // リスナー制限を解除
+        } catch (subscribeError: any) {
+          this.logger.error(`[Recording] Failed to subscribe to user ${userId}:`, subscribeError);
+          return;
+        }
 
-        const pcmStream = audioStream.pipe(new prism.opus.Decoder({ 
-          rate: 48000, 
-          channels: 2, 
-          frameSize: 960
-        }));
+        let pcmStream;
+        try {
+          pcmStream = audioStream.pipe(new prism.opus.Decoder({ 
+            rate: 48000, 
+            channels: 2, 
+            frameSize: 960
+          }));
+        } catch (decoderError: any) {
+          this.logger.error(`[Recording] Failed to create decoder for user ${userId}:`, decoderError);
+          if (audioStream) {
+            audioStream.destroy();
+          }
+          return;
+        }
         
-        const writer = pcmStream.pipe(fs.createWriteStream(chunkPath));
-        this.recordingStates.set(userId, writer);
-        this.logger.log(`[Recording] Recording stream setup completed for user ${userId}`);
+        let writer;
+        try {
+          writer = pcmStream.pipe(fs.createWriteStream(chunkPath));
+          this.recordingStates.set(userId, writer);
+          this.logger.log(`[Recording] Recording stream setup completed for user ${userId}`);
+        } catch (writerError: any) {
+          this.logger.error(`[Recording] Failed to create writer for user ${userId}:`, writerError);
+          if (audioStream) {
+            audioStream.destroy();
+          }
+          if (pcmStream) {
+            pcmStream.destroy();
+          }
+          return;
+        }
 
 
         // ストリームエラーハンドリングを強化
         audioStream.on('error', (error) => {
-          // 正常な動作で発生するエラーは無視
-          if ((error.message && error.message.includes('ERR_STREAM_PREMATURE_CLOSE')) ||
-              ((error as any).code && (error as any).code === 'ERR_STREAM_PREMATURE_CLOSE') ||
-              (error.message && error.message.includes('Premature close'))) {
-            this.logger.log(`[Recording] Normal stream close for user ${userId} (ignoring error)`);
+          // 正常な動作やメモリ関連で発生するエラーは無視
+          if ((error.message && (
+              error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
+              error.message.includes('Premature close') ||
+              error.message.includes('memory access out of bounds') ||
+              error.message.includes('RuntimeError')
+            )) ||
+              ((error as any).code && (
+                (error as any).code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+                (error as any).code === 'ERR_STREAM_DESTROYED'
+              ))) {
+            this.logger.log(`[Recording] Normal stream termination for user ${userId} (${error.message})`);
             // エラーでも録音ファイルを保存するため、writerを終了
             if (writer && !writer.destroyed) {
               writer.end();
@@ -608,6 +642,18 @@ class YomiageBot {
         });
 
         pcmStream.on('error', (error) => {
+          // PCMデコーダーのメモリエラーも寛容に処理
+          if ((error.message && (
+              error.message.includes('memory access out of bounds') ||
+              error.message.includes('RuntimeError') ||
+              error.message.includes('ERR_STREAM_PREMATURE_CLOSE')
+            ))) {
+            this.logger.log(`[Recording] Normal PCM processing termination for user ${userId} (${error.message})`);
+            if (writer && !writer.destroyed) {
+              writer.end();
+            }
+            return;
+          }
           this.logger.error(`[Recording] PCM stream error for user ${userId}:`, error);
           this.recordingStates.delete(userId);
         });
@@ -1242,15 +1288,21 @@ class YomiageBot {
           this.streamPlayers.delete(userId);
         }
 
-        const audioStream = sourceConnection.receiver.subscribe(userId, {
-          end: {
-            behavior: EndBehaviorType.AfterSilence,
-            duration: this.config.audio.silenceDuration,
-          },
-        });
+        let audioStream;
+        try {
+          audioStream = sourceConnection.receiver.subscribe(userId, {
+            end: {
+              behavior: EndBehaviorType.AfterSilence,
+              duration: this.config.audio.silenceDuration,
+            },
+          });
 
-        // 音声ストリームのバッファリングを改善
-        audioStream.setMaxListeners(0); // リスナー制限を解除
+          // 音声ストリームのバッファリングを改善
+          audioStream.setMaxListeners(0); // リスナー制限を解除
+        } catch (subscribeError: any) {
+          this.logger.error(`[Stream] Failed to subscribe to user ${userId}:`, subscribeError);
+          return;
+        }
 
         this.logger.log(`[Stream] Audio stream created for user ${userId}`);
 
@@ -1264,16 +1316,53 @@ class YomiageBot {
         // プレイヤーを管理に追加
         this.streamPlayers.set(userId, player);
         
-        const resource = createAudioResource(audioStream, {
-          inputType: StreamType.Opus,
-          inlineVolume: true,
-          silencePaddingFrames: 5, // 無音パディングを有効化して途切れを減らす
-        });
+        let resource;
+        try {
+          resource = createAudioResource(audioStream, {
+            inputType: StreamType.Opus,
+            inlineVolume: true,
+            silencePaddingFrames: 5, // 無音パディングを有効化して途切れを減らす
+          });
+        } catch (resourceError: any) {
+          this.logger.error(`[Stream] Failed to create audio resource for user ${userId}:`, resourceError);
+          // クリーンアップ
+          if (audioStream) {
+            audioStream.destroy();
+          }
+          this.streamPlayers.delete(userId);
+          return;
+        }
         
-        targetConnection.subscribe(player);
-        player.play(resource);
-
-        this.logger.log(`[Stream] Audio player started for user ${userId}`);
+        try {
+          targetConnection.subscribe(player);
+        } catch (subscribeError: any) {
+          this.logger.error(`[Stream] Failed to subscribe player for user ${userId}:`, subscribeError);
+          // クリーンアップ
+          if (audioStream) {
+            audioStream.destroy();
+          }
+          if (resource) {
+            resource.audioStream?.destroy();
+          }
+          this.streamPlayers.delete(userId);
+          return;
+        }
+        
+        try {
+          player.play(resource);
+          this.logger.log(`[Stream] Audio player started for user ${userId}`);
+        } catch (playError: any) {
+          this.logger.error(`[Stream] Failed to start player for user ${userId}:`, playError);
+          // クリーンアップ
+          if (audioStream) {
+            audioStream.destroy();
+          }
+          if (resource) {
+            resource.audioStream?.destroy();
+          }
+          this.streamPlayers.delete(userId);
+          return;
+        }
 
         player.on('stateChange', (oldState: any, newState: any) => {
           this.logger.log(`[Stream] Player state for user ${userId}: ${oldState.status} -> ${newState.status}`);
