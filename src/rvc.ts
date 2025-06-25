@@ -1,6 +1,3 @@
-// eslint-disable-next-line @typescript-eslint/no-deprecated
-// @ts-ignore
-const { client: gradioClient } = require("@gradio/client");
 import type { Config } from "./config";
 import { realpathSync } from 'fs';
 
@@ -8,6 +5,7 @@ export class RvcClient {
   private app: any;
   private host: string;
   private port: number;
+  private gradioClient: any;
 
   constructor(config: Config) {
     this.host = config.rvcHost;
@@ -17,8 +15,14 @@ export class RvcClient {
   private async connect() {
     if (this.app) return;
     try {
+        // 動的インポートを使用してESモジュールを読み込み
+        if (!this.gradioClient) {
+          const gradioModule = await import("@gradio/client");
+          this.gradioClient = gradioModule.client;
+        }
+        
         const url = `http://${this.host}:${this.port}`;
-        this.app = await gradioClient(url);
+        this.app = await this.gradioClient(url);
         console.log("Successfully connected to RVC Gradio app.");
     } catch (error) {
         console.error("Failed to connect to RVC Gradio app:", error);
