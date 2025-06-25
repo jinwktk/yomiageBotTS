@@ -34,31 +34,32 @@ export class RvcClient {
     if (!this.app) return null;
 
     try {
-      // Step 1: Ensure the model is loaded on the server side.
-      // This call also retrieves the correct index file path from the server.
-      await this.app.predict("/infer_change_voice", [
-        `${modelName}.pth`,
-        0.33,
-        0.33
+      // Step 1: モデルを選択・読み込み（最新のAPI仕様に合わせて修正）
+      const changeVoiceResult = await this.app.predict("/infer_change_voice", [
+        `${modelName}.pth`,  // モデル名
+        0,                   // 保護値1（0に変更）
+        0                    // 保護値2（0に変更）
       ]);
 
-      // Step 2: Perform the voice conversion.
+      console.log('Model selection result:', changeVoiceResult);
+
+      // Step 2: 音声変換実行
       const absoluteInputPath = realpathSync(inputPath).replace(/\\/g, '/');
       const normalizedIndexPath = `logs/${modelName}.index`;
 
       const result = await this.app.predict("/infer_convert", [
-        0,                      // 0: sid (speaker_id)
-        absoluteInputPath,      // 1: input_audio_path (absolute path)
-        pitch,                  // 2: f0_up_key (pitch)
-        null,                   // 3: f0_file (null for no file)
-        "rmvpe",                // 4: f0_method
-        "",                     // 5: file_index (manual path, empty to use dropdown)
-        normalizedIndexPath,    // 6: file_index2 (auto-detected dropdown path)
-        0.75,                   // 7: index_rate
-        3,                      // 8: filter_radius
-        0,                      // 9: resample_sr
-        0.25,                   // 10: rms_mix_rate
-        0.33,                   // 11: protect
+        0,                      // 0: sid (話者ID)
+        absoluteInputPath,      // 1: input_audio_path 
+        pitch,                  // 2: f0_up_key (ピッチ変更)
+        null,                   // 3: f0_file (F0カーブファイル)
+        "pm",                   // 4: f0_method (ピッチ抽出：pmに変更)
+        "",                     // 5: file_index (手動パス)
+        normalizedIndexPath,    // 6: file_index2 (自動検出パス)
+        0.75,                   // 7: index_rate (検索特徴率)
+        3,                      // 8: filter_radius (メディアンフィルタ)
+        0,                      // 9: resample_sr (リサンプリング)
+        0.25,                   // 10: rms_mix_rate (音量エンベロープ融合率)
+        0.33,                   // 11: protect (保護値)
       ]);
 
       const responseData = result.data;
