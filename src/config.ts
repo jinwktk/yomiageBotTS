@@ -73,7 +73,7 @@ export const createConfig = (): Config => {
     rvcPort: 7865,
     rvcDefaultModel: 'omochiv2',
     rvcDisabled: false,
-    rvcModelsPath: 'E:\\RVC1006Nvidia\\RVC1006Nvidia\\assets\\weights',
+    rvcModelsPath: 'E:\\RVC1006Nvidia\\assets\\weights',
     
     // VOICEVOX設定（デフォルト値）
     voicevoxHost: '127.0.0.1',

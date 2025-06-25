@@ -6,7 +6,7 @@ import type {
   ILogger,
   IUpdateHandler 
 } from '../interfaces/github-monitor.interface.js';
-import type { GitHubMonitorConfig } from '../config.js';
+import type { GitHubMonitorConfig } from '../config.ts';
 
 export class GitHubWebHookHandlerService implements IGitHubWebHookHandler {
   private app: express.Application;

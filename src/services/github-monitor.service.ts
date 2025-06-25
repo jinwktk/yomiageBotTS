@@ -1,5 +1,5 @@
-import type { IGitHubMonitor, IGitHubApi, ILogger, IGitHubWebHookHandler, IUpdateHandler } from '../interfaces/github-monitor.interface.js';
-import type { GitHubMonitorConfig } from '../config.js';
+import type { IGitHubMonitor, IGitHubApi, ILogger, IGitHubWebHookHandler, IUpdateHandler } from '../interfaces/github-monitor.interface.ts';
+import type { GitHubMonitorConfig } from '../config.ts';
 
 export class GitHubMonitorService implements IGitHubMonitor {
   private currentSha: string = '';

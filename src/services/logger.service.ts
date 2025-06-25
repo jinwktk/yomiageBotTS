@@ -1,11 +1,13 @@
-import type { ILogger } from '../interfaces/github-monitor.interface.js';
+import type { ILogger } from '../interfaces/github-monitor.interface.ts';
 
-export enum LogLevel {
-  ERROR = 0,
-  WARN = 1,
-  INFO = 2,
-  DEBUG = 3
-}
+export const LogLevel = {
+  ERROR: 0,
+  WARN: 1,
+  INFO: 2,
+  DEBUG: 3
+} as const;
+
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
 
 export class LoggerService implements ILogger {
   private prefix: string;

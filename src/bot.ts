@@ -26,17 +26,17 @@ import {
   VoiceConnection,
   NoSubscriberBehavior,
 } from '@discordjs/voice';
-import type { Config } from './config.js';
-import VoicevoxClient from './voicevox.js';
-import RvcClient from './rvc.js';
-import SpeechToText from './speech.js';
+import type { Config } from './config.ts';
+import VoicevoxClient from './voicevox.ts';
+import RvcClient from './rvc.ts';
+import SpeechToText from './speech.ts';
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import prism from 'prism-media';
 import { exec } from 'child_process';
-import LogManager from './logger.js';
+import LogManager from './logger.ts';
 
 interface Session {
   [guildId: string]: string; // channelId
