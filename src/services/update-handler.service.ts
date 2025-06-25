@@ -2,7 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import type { IUpdateHandler, PullResult, ILogger } from '../interfaces/github-monitor.interface.ts';
+import type { IUpdateHandler, PullResult, ILogger } from '../interfaces/github-monitor.interface.js';
 
 const execAsync = promisify(exec);
 

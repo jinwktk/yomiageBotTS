@@ -26,17 +26,17 @@ import {
   VoiceConnection,
   NoSubscriberBehavior,
 } from '@discordjs/voice';
-import type { Config } from './config.ts';
-import VoicevoxClient from './voicevox.ts';
-import RvcClient from './rvc.ts';
-import SpeechToText from './speech.ts';
+import type { Config } from './config.js';
+import VoicevoxClient from './voicevox.js';
+import RvcClient from './rvc.js';
+import SpeechToText from './speech.js';
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import prism from 'prism-media';
 import { exec } from 'child_process';
-import LogManager from './logger.ts';
+import LogManager from './logger.js';
 
 interface Session {
   [guildId: string]: string; // channelId
@@ -624,7 +624,9 @@ class YomiageBot {
               error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
               error.message.includes('Premature close') ||
               error.message.includes('memory access out of bounds') ||
-              error.message.includes('RuntimeError')
+              error.message.includes('offset is out of bounds') ||
+              error.message.includes('RuntimeError') ||
+              error.message.includes('RangeError')
             )) ||
               ((error as any).code && (
                 (error as any).code === 'ERR_STREAM_PREMATURE_CLOSE' ||
@@ -645,7 +647,9 @@ class YomiageBot {
           // PCMデコーダーのメモリエラーも寛容に処理
           if ((error.message && (
               error.message.includes('memory access out of bounds') ||
+              error.message.includes('offset is out of bounds') ||
               error.message.includes('RuntimeError') ||
+              error.message.includes('RangeError') ||
               error.message.includes('ERR_STREAM_PREMATURE_CLOSE')
             ))) {
             this.logger.log(`[Recording] Normal PCM processing termination for user ${userId} (${error.message})`);
@@ -1341,8 +1345,8 @@ class YomiageBot {
           if (audioStream) {
             audioStream.destroy();
           }
-          if (resource) {
-            resource.audioStream?.destroy();
+          if (resource && (resource as any).audioStream) {
+            (resource as any).audioStream.destroy();
           }
           this.streamPlayers.delete(userId);
           return;
@@ -1357,8 +1361,8 @@ class YomiageBot {
           if (audioStream) {
             audioStream.destroy();
           }
-          if (resource) {
-            resource.audioStream?.destroy();
+          if (resource && (resource as any).audioStream) {
+            (resource as any).audioStream.destroy();
           }
           this.streamPlayers.delete(userId);
           return;

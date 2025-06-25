@@ -1,4 +1,4 @@
-import type { ILogger } from '../interfaces/github-monitor.interface.ts';
+import type { ILogger } from '../interfaces/github-monitor.interface.js';
 
 export const LogLevel = {
   ERROR: 0,

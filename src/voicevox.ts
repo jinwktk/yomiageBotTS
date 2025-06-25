@@ -1,6 +1,6 @@
 import type { AxiosInstance } from 'axios';
 import axios from 'axios';
-import type { Config } from './config.ts';
+import type { Config } from './config.js';
 
 export interface Speaker {
     name: string;
