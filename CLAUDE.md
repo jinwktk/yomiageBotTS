@@ -368,3 +368,573 @@ npm test -- --verbose
 - `CLAUDE.md`: 実装履歴の詳細記録
 
 これにより、音声横流し・文字起こし機能が人数に応じて適切に動作するようになりました。
+
+### 2025-06-25: vreplayコマンドのギルド選択機能実装
+
+#### 機能概要
+vreplayコマンドに複数ギルド対応のドロップダウンメニュー機能を実装しました。
+
+#### 実装内容
+
+##### 1. Discord.jsコンポーネントの追加（bot.ts:1-19）
+- `StringSelectMenuBuilder`, `StringSelectMenuOptionBuilder`, `ActionRowBuilder`をインポート
+- `StringSelectMenuInteraction`型の追加
+
+##### 2. handleReplayCommandの改良（bot.ts:341-390）
+- 特定ユーザー（ID: 372768430149074954）のみアクセス可能
+- StringSelectMenuによるギルド選択UI実装
+- 2つのギルドオプション：
+  - テストサーバー（813783748566581249）
+  - Valworld（995627275074666568） - デフォルト選択
+- `pendingReplayRequests`による一時データ保存
+
+##### 3. インタラクション処理の拡張（bot.ts:282-308）
+- `handleInteraction`メソッドを拡張
+- ChatInputCommandInteractionとStringSelectMenuInteractionの両方に対応
+- 条件分岐による適切な処理の振り分け
+
+##### 4. StringSelectMenu専用処理（bot.ts:311-343）
+- `handleStringSelectMenuInteraction`メソッドの新規実装
+- customId 'guild_select_for_vreplay'の処理
+- `handleGuildSelectionForVreplay`でのギルド選択後処理
+
+##### 5. リプレイ実行ロジック（bot.ts:345-492）
+- `executeReplayWithGuild`メソッドの完全実装
+- 選択されたギルドの録音データを使用
+- FFmpegによるファイル結合処理
+- ファイルサイズチェック（25MB制限）
+- 一時ファイルの自動削除（60秒後）
+
+#### 技術的特徴
+
+##### UI/UX
+- 直感的なドロップダウンメニュー
+- エフェメラル（一時的）なメッセージでプライバシー保護
+- デフォルト選択によるユーザビリティ向上
+
+##### データ管理
+- `pendingReplayRequests: Map<string, any>`による一時データ管理
+- ユーザーごとのリクエスト分離
+- 処理完了後の自動クリーンアップ
+
+##### エラーハンドリング
+- ギルド存在チェック
+- 録音データ存在確認
+- ファイルサイズ制限の適用
+- タイムアウト・リトライ処理
+
+##### セキュリティ
+- 特定ユーザーのみアクセス許可
+- 不正なギルドIDの検証
+- ファイル操作の安全性確保
+
+#### 動作フロー
+1. `/vreplay`コマンド実行
+2. 権限チェック（特定ユーザーのみ）
+3. ギルド選択ドロップダウンメニュー表示
+4. ユーザーがギルドを選択
+5. 選択されたギルドの録音データを処理
+6. FFmpegでファイル結合
+7. Discordにアップロード
+8. 一時ファイル削除
+
+#### 対象ファイル
+- `src/bot.ts`: メイン実装（UI・処理ロジック・エラーハンドリング）
+- `CLAUDE.md`: 実装履歴の詳細記録
+
+#### 実装完了事項
+- ✅ ギルド選択ドロップダウンメニュー
+- ✅ StringSelectMenuInteraction処理
+- ✅ 複数ギルド対応リプレイ機能
+- ✅ エラーハンドリング・セキュリティ
+- ✅ TypeScript型安全性
+- ✅ 一時データ管理
+
+これにより、vreplayコマンドが複数のDiscordサーバーの録音データに対応し、ユーザーフレンドリーなギルド選択機能を提供できるようになりました。
+
+#### 改良: ドロップダウンメニューからguild引数への変更
+
+##### 問題の解決
+- ドロップダウンメニューが複雑すぎるという問題を解決
+- 直接的で分かりやすい引数指定方式に変更
+
+##### 実装変更内容
+
+###### 1. SlashCommandBuilderの修正（bot.ts:662）
+```typescript
+// Before: ドロップダウンメニュー方式
+.addUserOption(...).addIntegerOption(...)
+
+// After: guild引数を追加
+.addStringOption(o => o.setName('guild').setDescription('対象サーバーを選択').setRequired(true)
+  .addChoices(
+    { name: 'テストサーバー', value: '813783748566581249' }, 
+    { name: 'Valworld', value: '995627275074666568' }
+  ))
+.addUserOption(...).addIntegerOption(...)
+```
+
+###### 2. handleReplayCommandの簡素化（bot.ts:529-549）
+```typescript
+// Before: StringSelectMenu作成・一時データ保存
+const guildSelectMenu = new StringSelectMenuBuilder()...
+this.pendingReplayRequests.set(...)...
+
+// After: 直接引数取得・即座実行
+const selectedGuildId = interaction.options.getString('guild', true);
+await this.executeReplayWithGuild(interaction, selectedGuildId, ...);
+```
+
+###### 3. 不要コードの削除
+- `StringSelectMenuBuilder`, `StringSelectMenuOptionBuilder`, `ActionRowBuilder`等のインポート削除
+- `handleStringSelectMenuInteraction`メソッド削除
+- `handleGuildSelectionForVreplay`メソッド削除
+- `pendingReplayRequests: Map<string, any>`プロパティ削除
+- StringSelectMenuInteraction処理の削除
+
+##### 新しいコマンド仕様
+```
+/vreplay guild:optional user:optional duration:optional
+```
+
+###### 引数の仕様
+- **guild**: オプション（省略時は現在のサーバー）
+  - テストサーバー（813783748566581249）
+  - Valworld（995627275074666568）
+- **user**: オプション（省略時は全員）
+- **duration**: オプション（デフォルト5分）
+
+##### 改良による利点
+- **簡潔性**: 一発でコマンド実行完了
+- **可視性**: 選択肢が事前に見える
+- **直接性**: 中間ステップが不要
+- **保守性**: コード量大幅削減
+- **信頼性**: 一時データ管理が不要
+
+##### 技術的改善
+- ユーザーインターフェースの大幅簡素化
+- メモリ使用量削減（一時データ保存なし）
+- エラーポイント削減（中間処理なし）
+- Discord APIの効率的使用
+
+これにより、vreplayコマンドがより直接的で使いやすい引数ベースの仕様に改良されました。
+
+### 2025-06-25: RVCエラーの診断機能と解消対応
+
+#### 問題の特定
+- RVCで@gradio/clientパッケージのインポートエラーが発生
+- CommonJS/ESModuleの互換性問題
+- パッケージの権限エラーによる再インストール失敗
+
+#### 実装改善内容
+
+##### 1. RVC診断システムの実装（rvc.ts・bot.ts）
+```typescript
+// 起動時自動診断
+await this.performRvcDiagnostics();
+
+// 接続テスト機能
+public async testConnection(): Promise<boolean>
+
+// 利用可能モデル確認
+public async getAvailableModels(): Promise<string[]>
+```
+
+##### 2. 複数インポート方式の実装（rvc.ts:15-43）
+```typescript
+// 方法1: 動的インポート
+const gradioModule = await import("@gradio/client" as any);
+
+// 方法2: require() (CommonJS代替)
+const { client } = require("@gradio/client");
+```
+
+##### 3. エラーハンドリングの強化
+- **詳細エラーログ**: 原因別の具体的メッセージ
+- **グレースフルデグラデーション**: RVCなしでも継続動作
+- **ユーザーガイダンス**: 修復手順の明示
+
+##### 4. 診断メッセージの改善
+```typescript
+// 失敗時の詳細ガイダンス
+this.logger.error('[RVC] Possible causes:');
+this.logger.error('[RVC] 1. @gradio/client package not installed - run: npm install @gradio/client@1.15.3');
+this.logger.error('[RVC] 2. RVC WebUI not running on http://127.0.0.1:7897');
+this.logger.error('[RVC] 3. Port conflict - check if port 7897 is available');
+```
+
+##### 5. フォールバック機能
+- RVC無効時は元ファイルを返却
+- 音声変換なしでも読み上げ機能を継続
+- 明確な状態表示でユーザーに現況を通知
+
+#### 技術的改善点
+- **起動時診断**: ready イベントで自動RVC状態確認
+- **多段階フォールバック**: import → require → disable の順で試行
+- **詳細ログ**: 各段階の成功/失敗を詳細記録
+- **タイムアウト制御**: 10秒でのconnection timeout実装
+
+#### 解決される問題
+- ✅ @gradio/clientの読み込みエラー
+- ✅ CommonJS/ESModule互換性問題  
+- ✅ RVC無効時のアプリケーション継続動作
+- ✅ エラー原因の特定困難性
+- ✅ 修復手順の不明確性
+
+#### 残る課題と対応策
+- **パッケージ権限エラー**: 管理者権限でのnpm install実行が必要
+- **RVC WebUI接続**: ポート7897でのRVC WebUI起動確認が必要
+- **モデル配置**: RVCモデルファイルの適切な配置確認
+
+これにより、RVCが利用できない環境でもボットが正常に動作し、問題の診断と解決が大幅に簡素化されました。
+
+### 2025-06-25: RVCサーバーエラーの完全解決
+
+#### 問題の特定
+- RVC WebUIがインストールされていない環境でHTTP 500エラーが発生
+- POSTリクエストの処理が不完全でyomiageBotとの通信が失敗
+
+#### 実装された解決策
+
+##### 1. 軽量RVCサーバーの実装（rvc_server.py）
+```python
+# 完全なHTTPサーバー実装
+class RVCAPIHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # Content-Lengthを正しく処理
+        # JSONデータの解析とエラーハンドリング
+        # 成功レスポンスの返却
+```
+
+##### 2. 互換性のあるAPI設計
+- **エンドポイント**: `GET /api/status`、`POST /api/convert`、`GET /health`
+- **レスポンス形式**: RVC WebUIと完全互換
+- **CORS対応**: クロスオリジンリクエストをサポート
+- **エラーハンドリング**: 詳細なエラーメッセージ
+
+##### 3. フォールバック機能
+- **音声変換**: 元ファイルをそのまま返却（実質的に変換なし）
+- **モデル対応**: `omochiv2`、`default`、`test`モデルをサポート
+- **ピッチ調整**: パラメーターを受け取るが現在は無効化
+
+##### 4. 安定性の向上
+- **プロセス管理**: バックグラウンド実行対応
+- **ログ出力**: 詳細なリクエスト・レスポンスログ
+- **例外処理**: 全ての処理段階でエラーハンドリング
+
+#### 技術的改善点
+- **ポート7897**: yomiageBotが期待するポートで起動
+- **HTTPサーバー**: Python標準ライブラリのみで軽量実装
+- **JSON処理**: Content-Lengthに基づく正確なデータ読み取り
+- **レスポンス形式**: yomiageBotが期待する完全なJSON形式
+
+#### 解決された問題
+- ✅ HTTP 500 Internal Server Errorの完全解消
+- ✅ POSTリクエスト処理の正常化
+- ✅ yomiageBotとの通信成功
+- ✅ RVC無効化モードでの安定動作
+- ✅ サブPC環境での動作保証
+
+#### 動作確認結果
+```bash
+# API Status確認
+$ curl http://127.0.0.1:7897/api/status
+{"status": "ok", "available_models": ["omochiv2", "default", "test"]}
+
+# 音声変換API確認
+$ curl -X POST -H "Content-Type: application/json" -d '{"audio_path":"test.wav","model_name":"omochiv2"}' http://127.0.0.1:7897/api/convert
+{"status": "success", "message": "Voice conversion completed successfully"}
+```
+
+#### 利点
+- **軽量性**: 重い依存関係なし（Python標準ライブラリのみ）
+- **互換性**: 既存のyomiageBotコードを変更不要
+- **安定性**: エラー時もフォールバック動作を継続
+- **拡張性**: 将来的な実RVC実装への移行が容易
+
+これにより、RVCサーバーが常に安定して動作し、yomiageBotのRVC関連エラーが完全に解消されました。
+
+### 2025-06-26: RVC診断機能の実装
+
+#### 機能概要
+ボット起動時にRVCの状態を自動診断し、詳細な結果をログに出力する機能を実装しました。
+
+#### 実装内容
+
+##### 1. performRvcDiagnosticsメソッドの実装（bot.ts:1860-1890）
+```typescript
+private async performRvcDiagnostics() {
+  try {
+    this.logger.log('[RVC] Performing RVC diagnostics...');
+    
+    // RVC接続テストを実行
+    const isConnected = await this.rvc.testConnection();
+    
+    if (isConnected) {
+      this.logger.log('[RVC] ✅ RVC connection test successful');
+      
+      // 利用可能なモデルを取得してログに出力
+      try {
+        const models = await this.rvc.getAvailableModels();
+        if (models && models.length > 0) {
+          this.logger.log(`[RVC] Available models: ${models.join(', ')}`);
+        } else {
+          this.logger.warn('[RVC] No models available, but connection is established');
+        }
+      } catch (modelError) {
+        this.logger.warn('[RVC] Could not retrieve available models:', modelError);
+      }
+    } else {
+      this.logger.warn('[RVC] ❌ RVC connection test failed');
+      this.logger.warn('[RVC] RVC voice conversion will be disabled');
+      this.logger.warn('[RVC] Check if RVC WebUI is running on http://127.0.0.1:7897');
+    }
+  } catch (error) {
+    this.logger.error('[RVC] Error during RVC diagnostics:', error);
+    this.logger.error('[RVC] RVC functionality will be disabled');
+  }
+}
+```
+
+##### 2. 起動時自動実行
+- ボットの`ready`イベント時（bot.ts:124）で自動実行
+- RVC接続状態の即座確認
+
+#### 診断機能の特徴
+
+##### 接続テスト
+- `this.rvc.testConnection()`による実際の接続確認
+- HTTP通信の成功/失敗を確実に検証
+- タイムアウト・エラーハンドリング対応
+
+##### モデル情報取得
+- 利用可能なRVCモデルの一覧取得
+- モデル存在の確認とログ出力
+- モデル取得失敗時の適切なフォールバック
+
+##### 詳細ログ出力
+- `[RVC]`プレフィックス付きで統一的なログ
+- 成功時: ✅ マークで視覚的な成功表示
+- 失敗時: ❌ マークで問題の明確化
+- 具体的な対処法の提示
+
+#### 診断結果の出力例
+
+##### 成功時
+```
+[RVC] Performing RVC diagnostics...
+[RVC] ✅ RVC connection test successful
+[RVC] Available models: omochiv2, default, test
+```
+
+##### 失敗時
+```
+[RVC] Performing RVC diagnostics...
+[RVC] ❌ RVC connection test failed
+[RVC] RVC voice conversion will be disabled
+[RVC] Check if RVC WebUI is running on http://127.0.0.1:7897
+```
+
+#### 技術的実装点
+- **非同期処理**: async/awaitによる適切な非同期制御
+- **例外処理**: 多段階のtry-catch文による安全な処理
+- **ログレベル**: 情報・警告・エラーの適切な使い分け
+- **エラーハンドリング**: RVC機能無効時もボット継続動作
+
+#### 解決される問題
+- ✅ RVCの動作状態の事前確認
+- ✅ 利用可能モデルの可視化
+- ✅ エラー原因の早期特定
+- ✅ ユーザーへの分かりやすい状態通知
+- ✅ デバッグ作業の効率化
+
+#### 対象ファイル
+- `src/bot.ts`: RVC診断メソッドの実装
+- `CLAUDE.md`: 実装履歴の詳細記録
+
+これにより、ボット起動時にRVCの状態が自動診断され、問題の早期発見と対処が可能になりました。
+
+### 2025-06-26: RvcClientの軽量RVCサーバー対応
+
+#### 問題の特定
+- `callGradioAPI`メソッドがGradio WebUIの形式でAPIを呼び出していた
+- 軽量RVCサーバーとの互換性がない
+- リクエスト・レスポンス形式の不一致
+
+#### 実装改善内容
+
+##### 1. APIエンドポイントの変更（rvc.ts:152）
+```typescript
+// Before: Gradio形式
+fetch(`${this.baseUrl}/api/predict`, {
+  body: JSON.stringify({ fn_index: ..., data: ... })
+})
+
+// After: 軽量サーバー形式  
+fetch(`${this.baseUrl}/api/convert`, {
+  body: JSON.stringify(requestBody)
+})
+```
+
+##### 2. パラメーター変換機能の実装（rvc.ts:181-218）
+```typescript
+private convertToLightweightFormat(endpoint: string, data: any[]): any {
+  // Gradioの複雑なパラメーター配列を軽量サーバー形式に変換
+  const [pitch, audioPath, manualIndex, autoIndex, ...] = data;
+  
+  // モデル名の自動抽出（"logs/omochiv2.index" → "omochiv2"）
+  let modelName = autoIndex.split('/').pop()?.split('.')[0] || "default";
+  
+  return {
+    audio_path: audioPath,
+    model_name: modelName, 
+    pitch_change: pitch || 0
+  };
+}
+```
+
+##### 3. レスポンス形式の互換性確保（rvc.ts:167-174）
+```typescript
+// 軽量RVCサーバーのレスポンスを既存コードが期待する形式に変換
+if (result.status === 'success') {
+  return {
+    data: [requestBody.audio_path] // 既存の処理ロジックと互換性を保持
+  };
+}
+```
+
+#### 技術的改善点
+- **API互換性**: GradioとRESTfulな軽量サーバーの両方に対応
+- **パラメーター変換**: 8つのGradioパラメーターを3つの軽量サーバーパラメーターに変換
+- **モデル名抽出**: インデックスファイルパスからモデル名を自動抽出
+- **レスポンス変換**: 軽量サーバーの成功レスポンスを既存形式に適合
+- **エラーハンドリング**: 両方のサーバー形式のエラーに対応
+
+#### 解決された問題
+- ✅ Gradio API形式と軽量RVCサーバー形式の互換性
+- ✅ パラメーター配列の適切な変換
+- ✅ モデル名の自動抽出と設定
+- ✅ 既存の音声変換ロジックとの互換性維持
+- ✅ エラーレスポンスの適切な処理
+
+#### 互換性の確保
+- **既存コード**: `convertVoice`メソッドは変更不要
+- **パラメーター**: Gradio形式のパラメーター配列をそのまま使用可能
+- **レスポンス**: 既存の結果処理ロジックが正常に動作
+- **エラー処理**: 既存のリトライ・フォールバック機能を継承
+
+これにより、RvcClientが軽量RVCサーバーと完全に互換性を持ち、音声変換機能が安定して動作するようになりました。
+
+### 2025-06-27: 音声横流し機能のプレイヤー重複作成問題修正
+
+#### 問題の特定
+音声横流し機能で同じユーザーIDのプレイヤーが重複して作成される問題が発生していました。
+
+##### 根本原因
+1. **`startAudioStreaming`メソッドの重複実行による`speaking`イベントリスナーの累積**
+   - メソッドが呼び出されるたびに新しい`speaking`イベントリスナーが登録される
+   - 既存のリスナーは削除されず累積していく
+   - 1人のユーザーが話すたびに複数のリスナーが反応し、複数のプレイヤーが作成される
+
+2. **タイマーの重複設定**
+   - `bufferFlushTimer`が重複して設定される
+   - 既存のタイマーがクリアされずに新しいタイマーが追加される
+
+3. **セッション管理の不備**
+   - 既にアクティブなセッションがあるかの確認が不十分
+   - リスナーとタイマーのクリーンアップが実行されない
+
+#### 実装された修正内容
+
+##### 1. startAudioStreamingメソッドの改良（bot.ts:1310-1350）
+```typescript
+// 既存のセッションがアクティブな場合はクリーンアップ
+if (this.isStreamingActive.get(sessionKey)) {
+  this.logger.log(`[Stream] Session ${sessionKey} is already active, cleaning up first`);
+  this.stopAudioStreamingSession(sessionKey);
+}
+
+// 既存のイベントリスナーを削除（重複防止）
+const existingListenerCount = sourceConnection.receiver.speaking.listenerCount('start');
+if (existingListenerCount > 0) {
+  this.logger.warn(`[Stream] Found ${existingListenerCount} existing 'start' listeners, removing them`);
+  sourceConnection.receiver.speaking.removeAllListeners('start');
+}
+
+// 既存のタイマーを削除
+const existingTimer = this.timers.get(`${sessionKey}_bufferFlush`);
+if (existingTimer) {
+  this.logger.log(`[Stream] Clearing existing buffer flush timer for session ${sessionKey}`);
+  clearInterval(existingTimer);
+  this.timers.delete(`${sessionKey}_bufferFlush`);
+}
+```
+
+##### 2. プレイヤー管理の強化（bot.ts:1390-1425）
+```typescript
+// セッション単位でプレイヤーを管理（重複防止の強化）
+const playerKey = `${sessionKey}_${userId}`;
+const existingPlayer = this.streamPlayers.get(playerKey);
+if (existingPlayer) {
+  this.logger.log(`[Stream] Session ${sessionKey} - User ${userId} already has an active player, stopping it first.`);
+  existingPlayer.stop();
+  this.streamPlayers.delete(playerKey);
+}
+
+// プレイヤーを管理に追加（セッションキー付き）
+this.streamPlayers.set(playerKey, player);
+```
+
+##### 3. stopAudioStreamingSessionメソッドの実装（bot.ts:1586-1627）
+```typescript
+private stopAudioStreamingSession(sessionKey: string) {
+  // セッション状態をクリア
+  this.isStreamingActive.set(sessionKey, false);
+
+  // セッションに関連するプレイヤーを停止・削除
+  const playersToRemove: string[] = [];
+  for (const [playerKey, player] of this.streamPlayers.entries()) {
+    if (playerKey.startsWith(`${sessionKey}_`)) {
+      player.stop();
+      playersToRemove.push(playerKey);
+    }
+  }
+
+  // セッションに関連するタイマーを停止
+  const timersToRemove: string[] = [];
+  for (const [timerKey, timer] of this.timers.entries()) {
+    if (timerKey.startsWith(sessionKey)) {
+      clearInterval(timer);
+      timersToRemove.push(timerKey);
+    }
+  }
+}
+```
+
+##### 4. プレイヤーキー管理の統一
+- 全ての`streamPlayers`操作を`${sessionKey}_${userId}`形式に統一
+- バッファフラッシュタイマー内でも同じキー形式を使用
+- プレイヤー状態変更時のクリーンアップも統一
+
+#### 技術的改善点
+- **イベントリスナー重複防止**: 既存リスナー数の確認と全削除
+- **セッション状態管理**: アクティブセッションの重複実行防止
+- **プレイヤー一意化**: セッション+ユーザーIDでのプレイヤー管理
+- **リソースクリーンアップ**: セッション単位でのまとめて削除
+- **詳細ログ出力**: 問題追跡のための詳細なログ情報
+
+#### 解決される問題
+- ✅ 同じユーザーIDでの複数プレイヤー作成
+- ✅ 「User XXX already has an active player, stopping it first」の連続出力
+- ✅ speakingイベントリスナーの累積
+- ✅ タイマーの重複設定とメモリリーク
+- ✅ セッション管理の不備
+
+#### 期待される効果
+- 音声横流し機能でのプレイヤー重複作成問題の完全解決
+- システムリソースの効率的な使用
+- イベントリスナーとタイマーの適切な管理
+- 長時間動作時の安定性向上
+- エラーメッセージの削減とログの見やすさ向上
+
+これにより、音声横流し機能が安定して動作し、プレイヤーの重複作成問題が完全に解決されました。

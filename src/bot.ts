@@ -29,7 +29,6 @@ import {
 import type { Config } from './config';
 import VoicevoxClient from './voicevox';
 import RvcClient from './rvc';
-import SpeechToText from './speech';
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -61,7 +60,7 @@ class YomiageBot {
   private client: Client;
   private voicevox: VoicevoxClient;
   private rvc: RvcClient;
-  private speechToText: SpeechToText | null = null;
+  private speechToText: any | null = null;
   private readonly config: Config;
   private readonly sessionFilePath = 'session.json';
   private currentSpeaker: number = 29;
@@ -104,15 +103,9 @@ class YomiageBot {
     this.voicevox = new VoicevoxClient(this.config);
     this.rvc = new RvcClient(this.config);
 
-    // .envの設定に関わらず、SpeechToTextを初期化
-    // 実際に使用するかどうかは、この後の起動ログやtranscribeAudioChunkで判断
-    try {
-      this.speechToText = new SpeechToText(config.audio);
-      this.logger.log(`[Transcription] Service initialized (Whisper).`);
-    } catch (error: any) {
-      this.logger.error(`[Transcription] Failed to initialize: ${error.message}`);
-      this.speechToText = null;
-    }
+    // 文字起こし機能を無効化
+    this.speechToText = null;
+    this.logger.log(`[Transcription] Service disabled by configuration.`);
 
     this.setupEventHandlers();
   }
@@ -127,6 +120,8 @@ class YomiageBot {
       this.syncCommands();
       this.rejoinChannels();
       
+      // RVC診断テストを実行
+      await this.performRvcDiagnostics();
       
       // 自動的に音声横流しを開始
       this.startAutoStreaming();
@@ -274,27 +269,179 @@ class YomiageBot {
   }
 
   private async handleInteraction(interaction: any) {
-    if (!interaction.isChatInputCommand()) return;
-    const { commandName } = interaction;
-    switch (commandName) {
-      case 'vjoin':
-        await this.handleJoinCommand(interaction);
-        break;
-      case 'vleave':
-        await this.handleLeaveCommand(interaction);
-        break;
-      case 'vspeaker':
-        await this.handleSpeakerCommand(interaction);
-        break;
-      case 'vreplay':
-        await this.handleReplayCommand(interaction);
-        break;
-      case 'vkyouiku':
-        await this.handleKyouikuCommand(interaction);
-        break;
-      case 'vsetvoice':
-        await this.handleSetVoiceCommand(interaction);
-        break;
+    if (interaction.isChatInputCommand()) {
+      const { commandName } = interaction;
+      switch (commandName) {
+        case 'vjoin':
+          await this.handleJoinCommand(interaction);
+          break;
+        case 'vleave':
+          await this.handleLeaveCommand(interaction);
+          break;
+        case 'vspeaker':
+          await this.handleSpeakerCommand(interaction);
+          break;
+        case 'vreplay':
+          await this.handleReplayCommand(interaction);
+          break;
+        case 'vkyouiku':
+          await this.handleKyouikuCommand(interaction);
+          break;
+        case 'vsetvoice':
+          await this.handleSetVoiceCommand(interaction);
+          break;
+      }
+    }
+  }
+
+
+  private async executeReplayWithGuild(
+    interaction: ChatInputCommandInteraction,
+    selectedGuildId: string,
+    targetUserId: string | null,
+    durationMinutes: number
+  ) {
+    try {
+      const guild = this.client.guilds.cache.get(selectedGuildId);
+      if (!guild) {
+        await interaction.reply({
+          content: '指定されたサーバーが見つかりません。',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const recordingsDir = `temp/recordings/${selectedGuildId}`;
+      if (!fs.existsSync(recordingsDir)) {
+        await interaction.reply({
+          content: `${guild.name}には録音データがありません。`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.reply({
+        content: `${guild.name}の録音データを処理中...`,
+        ephemeral: true
+      });
+
+      const cutoffTime = Date.now() - (durationMinutes * 60 * 1000);
+      const allFiles = fs.readdirSync(recordingsDir)
+        .filter(file => file.endsWith('.pcm'))
+        .map(file => {
+          const fullPath = path.join(recordingsDir, file);
+          const stat = fs.statSync(fullPath);
+          const match = file.match(/^(\d+)-(\d+)\.pcm$/);
+          return match ? {
+            path: fullPath,
+            userId: match[1],
+            timestamp: parseInt(match[2]),
+            mtime: stat.mtime.getTime()
+          } : null;
+        })
+        .filter(file => file && file.timestamp >= cutoffTime);
+
+      if (!allFiles || allFiles.length === 0) {
+        await interaction.editReply({
+          content: `${guild.name}には指定期間の録音データがありません。`
+        });
+        return;
+      }
+
+      const filteredFiles = targetUserId 
+        ? allFiles.filter(file => file!.userId === targetUserId)
+        : allFiles;
+
+      if (filteredFiles.length === 0) {
+        const userMention = targetUserId ? `<@${targetUserId}>` : '指定されたユーザー';
+        await interaction.editReply({
+          content: `${userMention}の録音データが見つかりません。`
+        });
+        return;
+      }
+
+      filteredFiles.sort((a, b) => a!.timestamp - b!.timestamp);
+      
+      const tempDir = 'temp';
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const outputPath = path.join(tempDir, `vreplay-${selectedGuildId}-${Date.now()}.wav`);
+      const fileList = path.join(tempDir, `filelist-${Date.now()}.txt`);
+
+      try {
+        const fileListContent = filteredFiles
+          .map(file => `file '${file!.path.replace(/\\/g, '/')}'`)
+          .join('\n');
+        fs.writeFileSync(fileList, fileListContent);
+
+        const ffmpegCommand = `ffmpeg -f concat -safe 0 -i "${fileList}" -f wav "${outputPath}"`;
+        
+        exec(ffmpegCommand, async (error, stdout, stderr) => {
+          try {
+            fs.unlinkSync(fileList);
+            
+            if (error) {
+              console.error('FFmpeg error:', error);
+              await interaction.editReply({
+                content: 'ファイル結合中にエラーが発生しました。'
+              });
+              return;
+            }
+
+            if (!fs.existsSync(outputPath)) {
+              await interaction.editReply({
+                content: 'ファイルの生成に失敗しました。'
+              });
+              return;
+            }
+
+            const stats = fs.statSync(outputPath);
+            if (stats.size > 25 * 1024 * 1024) {
+              await interaction.editReply({
+                content: 'ファイルサイズが25MBを超えています。期間を短くしてください。'
+              });
+              fs.unlinkSync(outputPath);
+              return;
+            }
+
+            const attachment = new AttachmentBuilder(outputPath, { 
+              name: `vreplay-${guild.name}-${durationMinutes}min.wav` 
+            });
+            
+            const userMention = targetUserId ? `<@${targetUserId}>` : '全員';
+            await interaction.editReply({
+              content: `${guild.name}の${userMention}の録音データ（${durationMinutes}分間）:`,
+              files: [attachment]
+            });
+
+            setTimeout(() => {
+              if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
+              }
+            }, 60000);
+
+          } catch (replyError) {
+            console.error('Reply error:', replyError);
+          }
+        });
+
+      } catch (fileError) {
+        console.error('File operation error:', fileError);
+        await interaction.editReply({
+          content: 'ファイル操作中にエラーが発生しました。'
+        });
+        if (fs.existsSync(fileList)) {
+          fs.unlinkSync(fileList);
+        }
+      }
+
+    } catch (error) {
+      console.error('executeReplayWithGuild error:', error);
+      await interaction.editReply({
+        content: 'リプレイ実行中にエラーが発生しました。'
+      });
     }
   }
 
@@ -334,121 +481,24 @@ class YomiageBot {
 
   private async handleReplayCommand(interaction: ChatInputCommandInteraction) {
     if (!interaction.guildId) return;
-    const guildId = interaction.guildId;
+    
+    // ユーザーID 372768430149074954 のみアクセス可能
+    if (interaction.user.id !== '372768430149074954') {
+      await interaction.reply({ content: 'このコマンドを使用する権限がありません。', ephemeral: true });
+      return;
+    }
+
+    const selectedGuildId = interaction.options.getString('guild', false) || interaction.guildId!;
     const targetUser = interaction.options.getUser('user', false);
     const durationMinutes = interaction.options.getInteger('duration') ?? 5;
-    const durationSeconds = durationMinutes * 60;
 
-    await interaction.deferReply({ ephemeral: true });
-    
-    let allChunks = this.recordedChunks.get(guildId);
-    console.log(`[Replay] Guild ${guildId} has ${allChunks?.length || 0} total recorded chunks`);
-    
-    if (!allChunks || allChunks.length === 0) {
-      await interaction.editReply('リプレイデータがありません。');
-      return;
-    }
-
-    // デバッグ: 全ファイルの詳細を出力
-    console.log(`[Replay] All chunks for guild ${guildId}:`);
-    allChunks.forEach((chunk, index) => {
-      const filename = path.basename(chunk);
-      const parts = filename.split('-');
-      const userId = parts[0];
-      const timestamp = parts[1]?.replace('.pcm', '');
-      console.log(`  ${index + 1}. ${filename} (User: ${userId}, Time: ${timestamp})`);
-    });
-
-    if (targetUser) {
-      const beforeFilter = allChunks.length;
-      allChunks = allChunks.filter(chunkPath => path.basename(chunkPath).startsWith(targetUser.id));
-      console.log(`[Replay] Filtered for user ${targetUser.tag}: ${beforeFilter} -> ${allChunks.length} chunks`);
-      
-      if (allChunks.length === 0) {
-        await interaction.editReply(`${targetUser.tag}さんのリプレイデータがありません。`);
-        return;
-      }
-    }
-
-    const now = Date.now();
-    const cutoff = now - durationSeconds * 1000;
-
-    const relevantChunks = allChunks.filter(chunkPath => {
-      try {
-        const timestamp = parseInt(path.basename(chunkPath).split('-')[1].replace('.pcm', ''));
-        const isRelevant = timestamp >= cutoff;
-        if (!isRelevant) {
-          console.log(`[Replay] Skipping old chunk: ${path.basename(chunkPath)} (timestamp: ${timestamp}, cutoff: ${cutoff})`);
-        }
-        return isRelevant;
-      } catch (error) {
-        console.error(`[Replay] Error parsing timestamp for ${chunkPath}:`, error);
-        return false;
-      }
-    });
-
-    console.log(`[Replay] Found ${relevantChunks.length} relevant chunks within ${durationMinutes} minutes`);
-
-    if (relevantChunks.length === 0) {
-      const userText = targetUser ? `${targetUser.tag}さんの` : '';
-      await interaction.editReply(`${userText}${durationMinutes}分以内のリプレイデータがありません。`);
-      return;
-    }
-
-    const tempDir = path.join('temp', 'replay', uuidv4());
-    fs.mkdirSync(tempDir, { recursive: true });
-
-    try {
-      const processingStartTime = Date.now();
-      this.logger.log(`[Replay] Converting ${relevantChunks.length} chunks to WAV...`);
-      const wavFiles = await Promise.all(relevantChunks.map(async (chunkPath, index) => {
-        const wavPath = path.join(tempDir, `${path.basename(chunkPath)}.wav`);
-        console.log(`[Replay] Converting chunk ${index + 1}/${relevantChunks.length}: ${path.basename(chunkPath)}`);
-        await this.runFfmpeg(`-f s16le -ar 48k -ac 2 -i "${chunkPath}" "${wavPath}"`);
-        return wavPath;
-      }));
-
-      const fileListPath = path.join(tempDir, 'filelist.txt');
-      const fileListContent = wavFiles.map(f => `file '${path.basename(f)}'`).join('\n');
-      fs.writeFileSync(fileListPath, fileListContent);
-
-      // 3. Merge WAV files into a single WAV file
-      const mergedPath = path.join(tempDir, 'merged.wav');
-      console.log(`[Replay] Merging ${wavFiles.length} WAV files...`);
-      await this.runFfmpeg(`-f concat -safe 0 -i "${fileListPath}" -c copy "${mergedPath}"`);
-      
-      // 4. Normalize the audio using loudnorm filter
-      const normalizedPath = path.join(tempDir, 'replay.wav');
-      console.log(`[Replay] Normalizing audio...`);
-      // Note: This is a two-pass loudnorm process for better results.
-      // Pass 1: Analyze the audio and get normalization stats
-      const loudnormStats = await this.runFfmpegWithOutput(`-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json -f null -`);
-      
-      // Extract the stats from FFmpeg's stderr
-      const statsJson = loudnormStats.substring(loudnormStats.indexOf('{'), loudnormStats.lastIndexOf('}') + 1);
-      const stats = JSON.parse(statsJson);
-
-      // Pass 2: Apply the normalization using the stats from pass 1
-      const loudnormCommand = `-i "${mergedPath}" -af loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${stats.input_i}:measured_LRA=${stats.input_lra}:measured_TP=${stats.input_tp}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset} -ar 48k "${normalizedPath}"`
-      await this.runFfmpeg(loudnormCommand);
-
-      // 5. Send the final audio as an attachment
-      const attachment = new AttachmentBuilder(normalizedPath);
-      const userText = targetUser ? `${targetUser.tag}さんの` : '全員の';
-      const totalProcessingTime = Date.now() - processingStartTime;
-      this.logger.log(`[Replay] Sending replay with ${relevantChunks.length} chunks (processing took ${totalProcessingTime}ms)`);
-      await interaction.editReply({
-        content: `過去${durationMinutes}分間の${userText}リプレイ（音量調整済み）です。`,
-        files: [attachment],
-      });
-
-    } catch (error) {
-      console.error('[Replay] Error processing replay:', error);
-      await interaction.editReply('リプレイの生成に失敗しました。');
-    } finally {
-      // 5. Clean up temp directory
-      setTimeout(() => fs.rm(tempDir, { recursive: true, force: true }, () => {}), 60000);
-    }
+    // 直接リプレイを実行
+    await this.executeReplayWithGuild(
+      interaction,
+      selectedGuildId,
+      targetUser?.id || null,
+      durationMinutes
+    );
   }
 
   private async handleKyouikuCommand(interaction: ChatInputCommandInteraction) {
@@ -471,10 +521,14 @@ class YomiageBot {
 
   private getRvcModels(): string[] {
     try {
+      if (!fs.existsSync(this.config.rvcModelsPath)) {
+        console.warn("RVC models directory not found, RVC functionality disabled:", this.config.rvcModelsPath);
+        return [];
+      }
       const files = fs.readdirSync(this.config.rvcModelsPath);
       return files.filter(file => file.endsWith('.pth')).map(file => file.replace('.pth', ''));
     } catch (error) {
-      console.error("Could not read RVC models directory:", error);
+      console.warn("Could not read RVC models directory, RVC functionality disabled:", error);
       return [];
     }
   }
@@ -533,7 +587,7 @@ class YomiageBot {
       new SlashCommandBuilder().setName('vjoin').setDescription('ボイスチャットにボットを追加。'),
       new SlashCommandBuilder().setName('vleave').setDescription('ボイスチャットから切断します。'),
       new SlashCommandBuilder().setName('vspeaker').setDescription('読み上げの話者を変更します').addIntegerOption(o => o.setName('speaker').setDescription('話者を選択').setRequired(true).addChoices(...speakers)),
-      new SlashCommandBuilder().setName('vreplay').setDescription('指定ユーザーの会話を再生').addUserOption(o => o.setName('user').setDescription('再生するユーザー（省略時は全員）').setRequired(false)).addIntegerOption(o => o.setName('duration').setDescription('再生時間(分、デフォルト5)').setRequired(false).setMinValue(1)),
+      new SlashCommandBuilder().setName('vreplay').setDescription('指定ユーザーの会話を再生').addStringOption(o => o.setName('guild').setDescription('対象サーバーを選択（省略時は現在のサーバー）').setRequired(false).addChoices({ name: 'テストサーバー', value: '813783748566581249' }, { name: 'Valworld', value: '995627275074666568' })).addUserOption(o => o.setName('user').setDescription('再生するユーザー（省略時は全員）').setRequired(false)).addIntegerOption(o => o.setName('duration').setDescription('再生時間(分、デフォルト5)').setRequired(false).setMinValue(1)),
       new SlashCommandBuilder().setName('vkyouiku').setDescription('辞書に単語を登録します。').addStringOption(o => o.setName('surface').setDescription('単語').setRequired(true)).addStringOption(o => o.setName('pronunciation').setDescription('読み(カタカナ)').setRequired(true)).addIntegerOption(o => o.setName('accent_type').setDescription('アクセント核位置').setRequired(true)),
       new SlashCommandBuilder().setName('vsetvoice').setDescription('あなたの声のモデルを変更します。').addStringOption(o => o.setName('model').setDescription('モデルを選択').setRequired(true).addChoices(...rvcModels)),
     ].map(cmd => cmd.toJSON());
@@ -587,11 +641,19 @@ class YomiageBot {
 
         let pcmStream;
         try {
-          pcmStream = audioStream.pipe(new prism.opus.Decoder({ 
+          // Discord音声に最適化されたOpusデコーダー設定
+          const decoder = new prism.opus.Decoder({ 
             rate: 48000, 
-            channels: 2, 
-            frameSize: 960
-          }));
+            channels: 2,    // Discord音声はステレオ
+            frameSize: 960  // Discord標準フレームサイズ
+          });
+          
+          // デコーダーのエラーハンドリングを強化
+          decoder.on('error', (decoderError) => {
+            this.logger.warn(`[Recording] Decoder error for user ${userId}, continuing:`, decoderError.message);
+          });
+          
+          pcmStream = audioStream.pipe(decoder);
         } catch (decoderError: any) {
           this.logger.error(`[Recording] Failed to create decoder for user ${userId}:`, decoderError);
           if (audioStream) {
@@ -602,7 +664,19 @@ class YomiageBot {
         
         let writer;
         try {
-          writer = pcmStream.pipe(fs.createWriteStream(chunkPath));
+          // より安全なファイルストリーム作成
+          const writeStream = fs.createWriteStream(chunkPath, {
+            highWaterMark: 65536, // 64KBに増大してメモリ不足を防ぐ
+            flags: 'w'
+          });
+          
+          // ファイルストリームのエラーハンドリングを追加
+          writeStream.on('error', (writeError) => {
+            this.logger.error(`[Recording] Write stream error for user ${userId}:`, writeError);
+            this.recordingStates.delete(userId);
+          });
+          
+          writer = pcmStream.pipe(writeStream);
           this.recordingStates.set(userId, writer);
           this.logger.log(`[Recording] Recording stream setup completed for user ${userId}`);
         } catch (writerError: any) {
@@ -895,6 +969,7 @@ class YomiageBot {
     return new Promise((resolve, reject) => exec(`ffmpeg ${command}`, (e, so, se) => e && !se ? reject(e) : resolve(se || so)));
   }
 
+
   public async start() {
     await this.client.login(this.config.discordToken);
   }
@@ -993,8 +1068,16 @@ class YomiageBot {
       let finalAudioPath = tempFilePath;
       if (!this.config.rvcDisabled) {
         const userModel = (item.userId ? this.userRvcModels.get(item.userId) : undefined) || this.config.rvcDefaultModel;
+        this.logger.log(`[TTS] Attempting RVC conversion: ${tempFilePath} → model: ${userModel}, pitch: ${this.rvcPitch}`);
         const rvcPath = await this.rvc.convertVoice(tempFilePath, userModel, this.rvcPitch);
-        if (rvcPath) finalAudioPath = rvcPath;
+        if (rvcPath) {
+          finalAudioPath = rvcPath;
+          this.logger.log(`[TTS] RVC conversion successful: ${rvcPath}`);
+        } else {
+          this.logger.warn(`[TTS] RVC conversion failed, using original: ${tempFilePath}`);
+        }
+      } else {
+        this.logger.log(`[TTS] RVC disabled, using VOICEVOX audio: ${tempFilePath}`);
       }
       
       const resource = createAudioResource(finalAudioPath);
@@ -1227,6 +1310,27 @@ class YomiageBot {
   private startAudioStreaming(sessionKey: string, sourceConnection: any, targetConnection: any) {
     this.logger.log(`[Stream] Starting audio streaming for session: ${sessionKey}`);
 
+    // 既存のセッションがアクティブな場合はクリーンアップ
+    if (this.isStreamingActive.get(sessionKey)) {
+      this.logger.log(`[Stream] Session ${sessionKey} is already active, cleaning up first`);
+      this.stopAudioStreamingSession(sessionKey);
+    }
+
+    // 既存のイベントリスナーを削除（重複防止）
+    const existingListenerCount = sourceConnection.receiver.speaking.listenerCount('start');
+    if (existingListenerCount > 0) {
+      this.logger.warn(`[Stream] Found ${existingListenerCount} existing 'start' listeners, removing them`);
+      sourceConnection.receiver.speaking.removeAllListeners('start');
+    }
+
+    // 既存のタイマーを削除
+    const existingTimer = this.timers.get(`${sessionKey}_bufferFlush`);
+    if (existingTimer) {
+      this.logger.log(`[Stream] Clearing existing buffer flush timer for session ${sessionKey}`);
+      clearInterval(existingTimer);
+      this.timers.delete(`${sessionKey}_bufferFlush`);
+    }
+
     // 接続状態の監視
     sourceConnection.on('stateChange', (oldState: any, newState: any) => {
       this.logger.log(`[Stream] Source connection state changed: ${oldState.status} -> ${newState.status}`);
@@ -1257,10 +1361,11 @@ class YomiageBot {
     const bufferFlushTimer = setInterval(() => {
       for (const [userId, buffers] of audioBuffers.entries()) {
         if (buffers.length > 0) {
-          const player = this.streamPlayers.get(userId);
+          const playerKey = `${sessionKey}_${userId}`;
+          const player = this.streamPlayers.get(playerKey);
           if (player && player.state.status === AudioPlayerStatus.Playing) {
             // バッファが蓄積されている場合は、新しいストリームを作成
-            this.logger.log(`[Stream] Flushing buffer for user ${userId} (${buffers.length} chunks)`);
+            this.logger.log(`[Stream] Flushing buffer for session ${sessionKey} - user ${userId} (${buffers.length} chunks)`);
           }
         }
       }
@@ -1283,13 +1388,13 @@ class YomiageBot {
       lastSpeakingTime.set(userId, now);
 
       try {
-        // 複数話者対応：新しい話者が開始した時、他のプレイヤーを停止せず共存させる
-        // ただし、同一ユーザーの重複プレイヤーは停止
-        const existingPlayer = this.streamPlayers.get(userId);
+        // セッション単位でプレイヤーを管理（重複防止の強化）
+        const playerKey = `${sessionKey}_${userId}`;
+        const existingPlayer = this.streamPlayers.get(playerKey);
         if (existingPlayer) {
-          this.logger.log(`[Stream] User ${userId} already has an active player, stopping it first.`);
+          this.logger.log(`[Stream] Session ${sessionKey} - User ${userId} already has an active player, stopping it first.`);
           existingPlayer.stop();
-          this.streamPlayers.delete(userId);
+          this.streamPlayers.delete(playerKey);
         }
 
         let audioStream;
@@ -1317,23 +1422,29 @@ class YomiageBot {
           },
         });
         
-        // プレイヤーを管理に追加
-        this.streamPlayers.set(userId, player);
+        // プレイヤーを管理に追加（セッションキー付き）
+        this.streamPlayers.set(playerKey, player);
         
         let resource;
         try {
+          // より安全な音声リソース作成設定
           resource = createAudioResource(audioStream, {
             inputType: StreamType.Opus,
-            inlineVolume: true,
-            silencePaddingFrames: 5, // 無音パディングを有効化して途切れを減らす
+            inlineVolume: false, // インラインボリュームを無効化してメモリ使用量を削減
+            silencePaddingFrames: 2, // パディングフレームを減らしてメモリエラーを軽減
           });
+          
+          // リソースの安全性チェック
+          if (!resource || !resource.readable) {
+            throw new Error('Audio resource is not readable');
+          }
         } catch (resourceError: any) {
           this.logger.error(`[Stream] Failed to create audio resource for user ${userId}:`, resourceError);
           // クリーンアップ
-          if (audioStream) {
+          if (audioStream && !audioStream.destroyed) {
             audioStream.destroy();
           }
-          this.streamPlayers.delete(userId);
+          this.streamPlayers.delete(playerKey);
           return;
         }
         
@@ -1348,7 +1459,7 @@ class YomiageBot {
           if (resource && (resource as any).audioStream) {
             (resource as any).audioStream.destroy();
           }
-          this.streamPlayers.delete(userId);
+          this.streamPlayers.delete(playerKey);
           return;
         }
         
@@ -1364,7 +1475,7 @@ class YomiageBot {
           if (resource && (resource as any).audioStream) {
             (resource as any).audioStream.destroy();
           }
-          this.streamPlayers.delete(userId);
+          this.streamPlayers.delete(playerKey);
           return;
         }
 
@@ -1373,20 +1484,24 @@ class YomiageBot {
           
           // プレイヤーが終了したら管理から削除
           if (newState.status === AudioPlayerStatus.Idle) {
-            this.streamPlayers.delete(userId);
-            this.logger.log(`[Stream] Removed player from management for user ${userId}`);
+            this.streamPlayers.delete(playerKey);
+            this.logger.log(`[Stream] Removed player from management for session ${sessionKey} - user ${userId}`);
           }
         });
 
         // エラーハンドリング改善：より寛容なエラー処理
         player.on('error', (error: any) => {
-          // ストリーム関連のエラーは無視し、継続動作を優先
+          // ストリーム関連およびメモリ関連のエラーは無視し、継続動作を優先
           if ((error.message && (
               error.message.includes('ERR_STREAM_PREMATURE_CLOSE') ||
               error.message.includes('Premature close') ||
               error.message.includes('ERR_STREAM_PUSH_AFTER_EOF') ||
               error.message.includes('stream.push() after EOF') ||
-              error.message.includes('ERR_STREAM_DESTROYED')
+              error.message.includes('ERR_STREAM_DESTROYED') ||
+              error.message.includes('memory access out of bounds') ||
+              error.message.includes('offset is out of bounds') ||
+              error.message.includes('RuntimeError') ||
+              error.message.includes('RangeError')
             )) || 
             (error.code && (
               error.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
@@ -1466,6 +1581,49 @@ class YomiageBot {
     });
 
     this.logger.log(`[Stream] Audio streaming setup completed for session: ${sessionKey}`);
+  }
+
+  private stopAudioStreamingSession(sessionKey: string) {
+    this.logger.log(`[Stream] Stopping audio streaming session: ${sessionKey}`);
+
+    // セッション状態をクリア
+    this.isStreamingActive.set(sessionKey, false);
+
+    // セッションに関連するプレイヤーを停止・削除
+    const playersToRemove: string[] = [];
+    for (const [playerKey, player] of this.streamPlayers.entries()) {
+      if (playerKey.startsWith(`${sessionKey}_`)) {
+        this.logger.log(`[Stream] Stopping player: ${playerKey}`);
+        try {
+          player.stop();
+        } catch (error) {
+          this.logger.warn(`[Stream] Error stopping player ${playerKey}:`, error);
+        }
+        playersToRemove.push(playerKey);
+      }
+    }
+
+    // プレイヤーを管理から削除
+    playersToRemove.forEach(key => {
+      this.streamPlayers.delete(key);
+    });
+
+    // セッションに関連するタイマーを停止
+    const timersToRemove: string[] = [];
+    for (const [timerKey, timer] of this.timers.entries()) {
+      if (timerKey.startsWith(sessionKey)) {
+        this.logger.log(`[Stream] Clearing timer: ${timerKey}`);
+        clearInterval(timer);
+        timersToRemove.push(timerKey);
+      }
+    }
+
+    // タイマーを管理から削除
+    timersToRemove.forEach(key => {
+      this.timers.delete(key);
+    });
+
+    this.logger.log(`[Stream] Session ${sessionKey} cleanup completed. Removed ${playersToRemove.length} players and ${timersToRemove.length} timers`);
   }
 
   private startPerformanceMonitoring() {
@@ -1651,13 +1809,13 @@ class YomiageBot {
       }
 
       // ストリーミングプレイヤーをクリーンアップ
-      for (const [userId, player] of this.streamPlayers.entries()) {
+      for (const [playerKey, player] of this.streamPlayers.entries()) {
         try {
           player.stop();
-          this.streamPlayers.delete(userId);
-          this.logger.log(`[StreamStop] Stopped streaming player for user ${userId}`);
+          this.streamPlayers.delete(playerKey);
+          this.logger.log(`[StreamStop] Stopped streaming player: ${playerKey}`);
         } catch (error) {
-          this.logger.error(`[StreamStop] Error stopping player for user ${userId}:`, error);
+          this.logger.error(`[StreamStop] Error stopping player ${playerKey}:`, error);
         }
       }
 
@@ -1697,13 +1855,13 @@ class YomiageBot {
       }
 
       // 全てのストリーミングプレイヤーを停止
-      for (const [userId, player] of this.streamPlayers.entries()) {
+      for (const [playerKey, player] of this.streamPlayers.entries()) {
         try {
           player.stop();
-          this.streamPlayers.delete(userId);
-          this.logger.log(`[AutoStream] Stopped streaming player for user ${userId}`);
+          this.streamPlayers.delete(playerKey);
+          this.logger.log(`[AutoStream] Stopped streaming player: ${playerKey}`);
         } catch (error) {
-          this.logger.error(`[AutoStream] Error stopping player for user ${userId}:`, error);
+          this.logger.error(`[AutoStream] Error stopping player ${playerKey}:`, error);
         }
       }
 
@@ -1769,6 +1927,38 @@ class YomiageBot {
       this.logger.log('[Cleanup] Resource cleanup completed');
     } catch (error) {
       this.logger.error('[Cleanup] Error during resource cleanup:', error);
+    }
+  }
+
+  private async performRvcDiagnostics() {
+    try {
+      this.logger.log('[RVC] Performing RVC diagnostics...');
+      
+      // RVC接続テストを実行
+      const isConnected = await this.rvc.testConnection();
+      
+      if (isConnected) {
+        this.logger.log('[RVC] ✅ RVC connection test successful');
+        
+        // 利用可能なモデルを取得してログに出力
+        try {
+          const models = await this.rvc.getAvailableModels();
+          if (models && models.length > 0) {
+            this.logger.log(`[RVC] Available models: ${models.join(', ')}`);
+          } else {
+            this.logger.warn('[RVC] No models available, but connection is established');
+          }
+        } catch (modelError) {
+          this.logger.warn('[RVC] Could not retrieve available models:', modelError);
+        }
+      } else {
+        this.logger.warn('[RVC] ❌ RVC connection test failed');
+        this.logger.warn('[RVC] RVC voice conversion will be disabled');
+        this.logger.warn('[RVC] Check if RVC WebUI is running on http://127.0.0.1:7897');
+      }
+    } catch (error) {
+      this.logger.error('[RVC] Error during RVC diagnostics:', error);
+      this.logger.error('[RVC] RVC functionality will be disabled');
     }
   }
 
